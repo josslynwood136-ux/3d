@@ -1,0 +1,20 @@
+{
+  "name": "joss-phone",
+  "version": "2.0.0",
+  "description": "美乐地：仿手机桌面的 AI 伴侣 Web App（PWA）",
+  "private": true,
+  "engines": {
+    "node": ">=16"
+  },
+  "scripts": {
+    "start": "node sever/server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "NeteaseCloudMusicApi": "^4.32.0",
+    "web-push": "^3.6.7",
+    "ffmpeg-static": "^5.2.0",
+    "@supabase/supabase-js": "^2.45.0",
+    "sharp": "^0.33.5"
+  }
+}
