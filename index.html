@@ -26,7 +26,7 @@
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+SC:wght@300;400;500;700&family=Pacifico&family=Cinzel:wght@400;600;700&display=swap" rel="stylesheet">
   <title>美乐地</title>
-  <link rel="stylesheet" href="css/style.css?v=20261001k57">
+  <link rel="stylesheet" href="css/style.css?v=20261004d">
 </head>
 <body>
 
@@ -585,6 +585,9 @@
   <!-- IG Toast -->
   <div class="ig-toast" id="igToast"></div>
 
+  <!-- supabase **不能**加 defer：下面内联判断是同步读 window.supabase 的，
+       defer 会让它在判断执行时还没加载，结果又从 unpkg 重复拉一份。
+       （页面底部那批脚本都是 defer，故意的，见 </body> 前的注释。） -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   <script>
   if (!window.supabase) {
@@ -608,7 +611,8 @@
     import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
     import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
     import { RoundedBoxGeometry } from 'three/addons/geometries/RoundedBoxGeometry.js';
-    import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
+    import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
 
     // ===== 色彩管理：全局关掉 =====
     // r128 时代 ColorManagement.enabled 默认 false，写进材质的十六进制色
@@ -624,48 +628,56 @@
     window.THREE = THREE;
     window.OrbitControls = OrbitControls;
     window.GLTFLoader = GLTFLoader;
+window.FBXLoader = FBXLoader;
     // 小厨房（js/home/rooms-3d/）的圆角盒体，r170 里是 ESM 模块不是全局
     window.RoundedBoxGeometry = RoundedBoxGeometry;
     // 克隆带蒙皮的模型必须用 SkeletonUtils.clone，普通 clone 会共用同一副骨骼
     window.SkeletonUtils = SkeletonUtils;
   </script>
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
-  <script src="js/ui.js?v=20261001k57"></script>
-<script src="js/state.js?v=20261001k57"></script>
-<script src="js/relate.js?v=20261001k57"></script>
-<script src="js/chat.js?v=20261001k57"></script>
-<script src="js/tts.js?v=20261001k57"></script>
-<script src="js/rag.js?v=20261001k57"></script>
-<script src="js/webrtc.js?v=20261001k57"></script>
-<script src="js/home/rooms.js?v=20261001k57"></script>
-<script src="js/home/room-data.js?v=20261001k57"></script>
-<script src="js/home/art.js?v=20261001k57"></script>
-<script src="js/home/rooms-2d.js?v=20261001k57"></script>
-<script src="js/home/rooms-3d/kitchen-hud.js?v=20261001k57"></script>
-<script src="js/home/rooms-3d/kitchen-geometry.js?v=20261001k57"></script>
-<script src="js/home/rooms-3d/kitchen-scene.js?v=20261001k57"></script>
-<script src="js/home/rooms-3d/bedroom-hud.js?v=20261001k57"></script>
-<script src="js/home/rooms-3d/bedroom-geometry.js?v=20261001k57"></script>
-<script src="js/home/rooms-3d/bedroom-scene.js?v=20261001k57"></script>
-<script src="js/home/room-view-2d.js?v=20261001k57"></script>
-<script src="js/home/room-view-3d.js?v=20261001k57"></script>
-<script src="js/home/character-2d.js?v=20261001k57"></script>
-<script src="js/home/character-3d.js?v=20261001k57"></script>
+  <!-- 从这里开始到 </body> 全部 defer：
+       HTML 解析时并行下载，解析完再按下面的顺序统一执行。
+       顺序不变，只是不再一个接一个阻塞渲染。
+       唯一例外是上面的 supabase（L588）—— 它下面那行内联代码是同步
+       检查 window.supabase 的，加 defer 会被误判成没加载，再从 unpkg
+       重复拉一份。要改那两行得连内联判断一起改。 -->
+  <script defer src="https://cdnjs.cloudflare.com/ajax/libs/tween.js/18.6.4/tween.umd.js"></script>
+  <script defer src="js/ui.js?v=20261004d"></script>
+<script defer src="js/state.js?v=20261004d"></script>
+<script defer src="js/relate.js?v=20261004d"></script>
+<script defer src="js/chat.js?v=20261004d"></script>
+<script defer src="js/tts.js?v=20261004d"></script>
+<script defer src="js/rag.js?v=20261004d"></script>
+<script defer src="js/webrtc.js?v=20261004d"></script>
+<script defer src="js/home/rooms.js?v=20261004d"></script>
+<script defer src="js/home/room-data.js?v=20261004d"></script>
+<script defer src="js/home/art.js?v=20261004d"></script>
+<script defer src="js/home/rooms-2d.js?v=20261004d"></script>
+<script defer src="js/home/rooms-3d/scene-base.js?v=20261004d"></script>
+<script defer src="js/home/rooms-3d/kitchen-hud.js?v=20261004d"></script>
+<script defer src="js/home/rooms-3d/kitchen-geometry.js?v=20261004d"></script>
+<script defer src="js/home/rooms-3d/kitchen-scene.js?v=20261004d"></script>
+<script defer src="js/home/rooms-3d/bedroom-hud.js?v=20261004d"></script>
+<script defer src="js/home/rooms-3d/bedroom-geometry.js?v=20261004d"></script>
+<script defer src="js/home/rooms-3d/bedroom-scene.js?v=20261004d"></script>
+<script defer src="js/home/room-view-2d.js?v=20261004d"></script>
+<script defer src="js/home/room-view-3d.js?v=20261004d"></script>
+<script defer src="js/home/character-2d.js?v=20261004d"></script>
+<script defer src="js/home/character-3d.js?v=20261004d"></script>
 <!-- 3D 人物适配器：接 character-3d.js 那个插槽。必须在 character-3d.js 之后
      （里面也有轮询兜底，但顺序对了就不用等）。GLB 10MB，只解析一次。 -->
-<script src="js/home/character-3d-girl.js?v=20261001k57"></script>
+<script defer src="js/home/character-3d-girl.js?v=20261004d"></script>
 <!-- 3D 人物编辑面板：右上角那个按钮在 3D 房间里打开它，
      在 2D 房间里仍然打开 character-2d.js 的图片/表情面板。 -->
-<script src="js/home/character-3d-editor.js?v=20261001k57"></script>
-<script src="js/home/furniture.js?v=20261001k57"></script>
-<script src="js/home/index.js?v=20261001k57"></script>
-<script src="js/apps.js?v=20261001k57"></script>
+<script defer src="js/home/character-3d-editor.js?v=20261004d"></script>
+<script defer src="js/home/furniture.js?v=20261004d"></script>
+<script defer src="js/home/index.js?v=20261004d"></script>
+<script defer src="js/apps.js?v=20261004d"></script>
 
 
-  <script src="js/liveroom.js?v=20261001k57"></script>
-  <script src="js/profile-ig.js?v=20261001k57"></script>
-  <script src="js/push.js?v=20261001k57"></script>
-  <script src="js/init.js?v=20261001k57"></script>
-  <script src="js/sync.js?v=20261001k57"></script>
+  <script defer src="js/liveroom.js?v=20261004d"></script>
+  <script defer src="js/profile-ig.js?v=20261004d"></script>
+  <script defer src="js/push.js?v=20261004d"></script>
+  <script defer src="js/init.js?v=20261004d"></script>
+  <script defer src="js/sync.js?v=20261004d"></script>
 </body>
 </html>

@@ -24,19 +24,18 @@
   var renderer = null;
   var camera = null;
   var controls = null;
-  var animId = null;
   var initTimer = null;
-  // HUD 上绑过的按钮。hudUnbind 必须在模块级 —— destroyBedroom3D 是模块级
-  // 函数，拿不到 initBedroom3D 里的局部函数。
-  var hudHandlers = [];
-  function hudUnbind() {
-    hudHandlers.forEach(function (r) { r.el.removeEventListener('click', r.h); });
-    hudHandlers = [];
-  }
+  // 共用底座（取景 / 提示条 / HUD 绑定 / resize 重试 / 动画循环 / 投影）。
+  // scene-base.js 排在本文件之前加载，这里 parse 期就能拿到。
+  var base = global.Home3DSceneBase;
+  // 下面三个句柄都必须放在模块级 —— destroyBedroom3D 是模块级函数，
+  // 拿不到 initBedroom3D 里的局部变量。
+  var hudBinder = null;
+  var resizeWatcher = null;
+  var loop = null;
+  var notifier = null;
   var initAttempts = 0;
   var pointerHandlers = null;
-  var resizeHandler = null;
-  var lastFrame = 0;
   var destroyed = false;
   // 传给几何体的参数对象，销毁时用来释放 PMREM 的 render target
   var geoArgs = null;
@@ -130,19 +129,17 @@
     var DESIGN_EXTENT = 7.0;
     camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
 
-    function fitCamera() {
-      var w = host.clientWidth, h = host.clientHeight;
-      if (!w || !h) return false;   // 容器还没布局好，交给 onResize 重试
-      var extentV = DESIGN_EXTENT * Math.max(1, DESIGN_H / h);
-      var extentH = Math.max(DESIGN_EXTENT * (DESIGN_W / DESIGN_H), extentV * (w / h));
-      camera.left = -extentH;
-      camera.right = extentH;
-      camera.top = extentV;
-      camera.bottom = -extentV;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-      return true;
-    }
+    // 取景数学在 scene-base.js（和厨房共用一份），这里只喂卧室的设计尺寸。
+    // 返回值有语义：false = 容器还没布局好，交给 resize 重试（见下方
+    // resizeWatcher 和 animate 里的 tickRetry）。
+    var fitCamera = base.makeFitCamera({
+      getHost: function () { return host; },
+      getCamera: function () { return camera; },
+      getRenderer: function () { return renderer; },
+      designW: DESIGN_W,
+      designH: DESIGN_H,
+      designExtent: DESIGN_EXTENT
+    });
     // 机位：方向和厨房一致（delta 12.5 / 10.05 / 12.5，即仰角约 29.6 度），
     // 只是把注视点抬到房间实际重心（微缩景观高 6.9 米，不是原来 1.45）。
     var defaultCamPos = new THREE.Vector3(12.5, 13.05, 12.5);
@@ -189,7 +186,13 @@
     // 0.62 是原文件的值，但实测下来整张图像蒙了一层白纱：地板的陶土色被冲成
     // 灰粉、大面积白色全糊成一片。所谓"模模糊糊"就是这个。
     // 光源位置修正后层次已经出来了，但总量还是偏高，这个数要往下压。
-    renderer.toneMappingExposure = 0.30;
+    // 0.30 太暗了，整间房发灰发闷（"昏暗模糊"）。
+    // 之前注释说 0.62 会"蒙白纱"，是因为当时太阳从相机这侧打，
+    // 正面全是光、没有任何暗部，亮处一糊就成了白纱。
+    // 现在阳光改成从窗外斜射进来（见 geometry 里的 sun），
+    // 房间有了明确的亮区暗区，层次托得住更高曝光。
+    // 0.95 保守些，比厨房 1.05 略低，留卧室一点柔和。
+    renderer.toneMappingExposure = 0.62;
 
     controls = new OrbitControls(camera, canvas);
     controls.enableDamping = true;
@@ -236,18 +239,13 @@
     };
     var NIGHT = { sun: DAY.sun * 0.10, hemi: DAY.hemi * 0.42, fill: DAY.fill * 0.5 };
 
-    var toast = host.querySelector('#interactive-toast');
-    var toastTimer;
-    function showNotification(txt) {
-      if (!toast) return;
-      toast.textContent = txt;
-      toast.style.opacity = '1';
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(function () {
-        toast.textContent = '拖动平移视角 · 右键旋转 · 点地板走动';
-        toast.style.opacity = '0';
-      }, 2200);
-    }
+    // 提示条：显示/淡出的时序在 scene-base.js，卧室只提供默认文案
+    // （淡出时要把操作提示写回去，不然提示条空着，用户不知道怎么操作）。
+    notifier = base.makeToast({
+      getHost: function () { return host; },
+      defaultText: '拖动平移视角 · 右键旋转 · 点地板走动'
+    });
+    function showNotification(txt) { notifier.show(txt); }
 
     var isDaylight = true;
     var isLampOn = true;
@@ -311,9 +309,127 @@
       if (btn) btn.classList.toggle('bd-btn-on', isCozy);
       // 只动曝光度，不动灯 —— 这是最不破坏原本配色的柔化方式。
       new TWEEN.Tween(renderer)
-        .to({ toneMappingExposure: isCozy ? 0.22 : 0.30 }, 700)
+        .to({ toneMappingExposure: isCozy ? 0.42 : 0.62 }, 700)
         .start();
       showNotification(isCozy ? '调暗一档，适合夜里看 🌙' : '恢复原本亮度 ✨');
+    }
+
+    // ---- 窗扇开合 + 窗帘开合 HUD ----
+    var winOpen = false;
+    var curtainOpen = true;   // 默认已抽开（帘子收在两侧）
+    var sashL = geoArgs.sashL || null;
+    var sashR = geoArgs.sashR || null;
+    var curtainRig = geoArgs.curtain || null;
+    var curSheer = geoArgs.sheer || null;
+    // 各自的原始 x。窗扇靠平移错开，窗帘靠几何体重算顶点。
+    var sashL_x0 = sashL ? sashL.position.x : 0;
+    var sashR_x0 = sashR ? sashR.position.x : 0;
+    var sashL_w = geoArgs.sashW || 0;
+    var sashR_w = geoArgs.sashW || 0;
+    var sashTweenL = null;
+    var sashTweenR = null;
+    // curtainOpen = true 表示「帘子已抽开」。几何体默认建成闭合状态（shape(0)），
+    // 这里同步一次初始状态，否则按钮亮着「开」但帘子其实是合上的。
+    // 无条件调一次 setOpen —— 合上时也别去依赖几何体碰巧建对了。
+    var curtainT = curtainOpen ? 1 : 0;
+    var curtainTL = curtainT, curtainTR = curtainT;
+    var curtainTween = null;
+    if (curtainRig) curtainRig.setOpen(curtainT, 0, 0, 0);
+
+    function toggleWindow() {
+      winOpen = !winOpen;
+      var btn = host.querySelector('#bd-win');
+      if (btn) btn.classList.toggle('bd-btn-on', winOpen);
+      // 推拉窗：左扇固定，右扇滑过去叠在左扇后面。只开左边一半。
+      //
+      // 真窗就是这样——只有一扇能活动，另一扇是固定的。
+      // 两扇的前后轨道差 0.07，所以叠在一起只是前后错开、不会真撞上。
+      // 之前试过的几种都不行，记一下免得又绕回去：
+      //   A. 两扇往左右两边抽 —— 各自那条加粗边框压在窗洞左右端，
+      //      室内左右各杵一道竖框，又难看又穿模。
+      //   B. 往左抽一点留条缝 —— 缝太窄，开没开几乎看不出来。
+      //
+      // 现在右扇整个滑到左扇位置，右侧空出半个窗洞。
+      // 只出现一条竖边（后面那扇的），不会两边各杵一道。
+      // 连点要打断上一条，否则两条 tween 同时写 position.x 会打架
+      if (sashTweenL) sashTweenL.stop();
+      if (sashTweenR) sashTweenR.stop();
+      if (sashL) {
+        sashTweenL = new TWEEN.Tween(sashL.position)
+          .to({ x: sashL_x0 }, 900)
+          .easing(TWEEN.Easing.Cubic.InOut)
+          .start();
+      }
+      if (sashR) {
+        sashTweenR = new TWEEN.Tween(sashR.position)
+          .to({ x: winOpen ? sashL_x0 : sashR_x0 }, 900)
+          .easing(TWEEN.Easing.Cubic.InOut)
+          .start();
+      }
+      showNotification(winOpen ? '右扇滑开，窗开着 🪟' : '窗合上了');
+    }
+
+    function toggleCurtain() {
+      curtainOpen = !curtainOpen;
+      var btn = host.querySelector('#bd-curtain');
+      if (btn) btn.classList.toggle('bd-btn-on', curtainOpen);
+
+      // 手拉布逻辑：一整幅布从中间向两侧抽 / 向中间合。
+      // 不能用 scale.x：那会把正弦褶皱一起拉宽压平，收拢处像抻平的塑料布。
+      var tgt = curtainOpen ? 1 : 0;
+      var dir = curtainOpen ? 1 : -1;
+      var DUR = 1500;
+
+      // 连点要打断上一次，否则两条 tween 同时写进度，动作会叠在一起
+      if (curtainTween) curtainTween.stop();
+
+      // k 是线性时间 0→1（ sway / lift / drag 都吃它，保证节奏按真实时间走）。
+      // 位移另用 easeInOutCubic(k) 算，动静分离：之前 v 和 p 共用一个 Cubic，
+      // 中段被加速、摆动包络也被压扁，看着就像推拉门。
+      function easeInOutCubic(k) { return k < 0.5 ? 4 * k * k * k : 1 - Math.pow(-2 * k + 2, 3) / 2; }
+      function clamp01(x) { return x > 1 ? 1 : (x < 0 ? 0 : x); }
+      var startL = curtainTL, startR = curtainTR;
+      // 进度必须用闭包里的 st 读，不能写 this.v ——
+      // 这个 tween.js 调 onUpdate 时不把 Tween 挂到 this 上，this.v 是
+      // undefined；setOpen(undefined) 会算出 NaN 顶点，整片帘子不渲染，
+      // 而且不报错（只是凭空消失）。之前窗帘一直不动就是栽在这里。
+      var st = { k: 0 };
+      curtainTween = new TWEEN.Tween(st)
+        .to({ k: 1 }, DUR)
+        .easing(TWEEN.Easing.Linear.None)
+        .onUpdate(function () {
+          var k = clamp01(st.k);
+          // 右幅领跑约 90ms，左幅追上：破除完全对称的 CG 感，中断续播也不跳变
+          var eR = easeInOutCubic(k);
+          var eL = easeInOutCubic(clamp01(k * 1.12 - 0.06));
+          var vR = startR + (tgt - startR) * eR;
+          var vL = startL + (tgt - startL) * eL;
+          curtainTL = vL; curtainTR = vR; curtainT = (vL + vR) / 2;
+          // 一次大幅摆 + 一次小幅余纹，到 k=1 归零；幅度给到 11cm，正交相机下才看得见。
+          // 左右幅差 15%，不同步才像两块布。
+          var swayBase = dir * (0.11 * Math.sin(k * Math.PI * 2) * (1 - k * 0.5)
+            + 0.035 * Math.sin(k * Math.PI * 5) * (1 - k) * (1 - k));
+          // 下摆提起 9cm 再落下 + 底部位置滞后 14cm，中段布挤在一起的顿挫感
+          var lift = Math.sin(k * Math.PI) * 0.09;
+          var drag = dir * 0.14 * Math.sin(k * Math.PI);
+          if (curtainRig) curtainRig.setOpen([vL, vR], [swayBase, swayBase * 0.85], lift, drag);
+        })
+        .onComplete(function () {
+          curtainTween = null;
+          curtainTL = curtainTR = curtainT = tgt;
+          // 这里用精确终值归位，比 onUpdate 里读到的那次更准
+          if (curtainRig) curtainRig.setOpen(tgt, 0, 0, 0);
+        })
+        .start();
+
+      // 薄纱是窗上的一层纱，一直在，只是被窗帘盖住时存在感变低。
+      if (curSheer) {
+        curSheer.visible = true;
+        new TWEEN.Tween(curSheer.material)
+          .to({ opacity: curtainOpen ? 0.28 : 0.12 }, 700)
+          .start();
+      }
+      showNotification(curtainOpen ? '窗帘抽开了 🌇' : '窗帘合上了 🌙');
     }
 
     function resetView() {
@@ -326,72 +442,69 @@
       showNotification('视角已重置 ↺');
     }
 
-    // attach() 时要能重新绑，和厨房的 bindHudButton 同一个理由：
-    // 房间来回切，容器 innerHTML 被重建过。所以这里把 handler 记下来，
-    // 销毁时能摘掉（见 hudUnbind）。
-    function bindHudButton(sel, fn) {
-      var el = host.querySelector(sel);
-      if (!el) return;
-      var h = function (e) {
-        e.stopPropagation();
-        fn();
-      };
-      el.addEventListener('click', h);
-      hudHandlers.push({ el: el, h: h });
-    }
+    // 房间来回切，容器 innerHTML 被重建过，按钮节点全部换新 —— 所以
+    // rebind 要能整体拆掉重来。卧室的两个开关（stopPropagation + 记录
+    // handler）都由 scene-base 提供，厨房那边是另一组取值。
+    hudBinder = base.makeHudBinder({
+      getHost: function () { return host; },
+      stopPropagation: true,
+      track: true
+    });
     function rebindHudButtons() {
-      hudUnbind();          // 模块级的那个
-      bindHudButton('#bd-mood', toggleMood);
-      bindHudButton('#bd-lamp', toggleLamp);
-      bindHudButton('#bd-glow', toggleCozy);
-      bindHudButton('#bd-reset', resetView);
+      hudBinder.rebind([
+        ['#bd-mood', toggleMood],
+        ['#bd-lamp', toggleLamp],
+        ['#bd-glow', toggleCozy],
+        ['#bd-win', toggleWindow],
+        ['#bd-curtain', toggleCurtain],
+        ['#bd-reset', resetView]
+      ]);
     }
     rebindHudButtons();
 
+    // ---- resize ----
+    // 正交相机没有 aspect，取景由 fitCamera() 按容器尺寸重算。容器尺寸在
+    // 刚 inject HUD 之后可能还是 0，所以要连续重试，拿到真实尺寸为止。
+    // 重试计数和"没取到景就再试"的逻辑在 scene-base 的 watcher 里，
+    // animate 每帧通过 tickRetry 推一把 —— 只靠 resize 事件的话，注入后
+    // 那次失败就再也没人重试了。
+    resizeWatcher = base.makeResizeWatcher({
+      getHost: function () { return host; },
+      fit: fitCamera,
+      guard: function () { return !!(host && renderer && camera); },
+      maxRetry: 30
+    });
+
     // ---- 动画循环 ----
     // 3D 小人已下线，这里只转场景；人物由 2D 覆盖层（.home-person）渲染。
-    function animate(now) {
-      if (destroyed || !renderer || !scene) return;
-      animId = requestAnimationFrame(animate);
-      lastFrame = now;
-      // 容器尺寸还没稳定时继续重试取景
-      if (fitRetry > 0 && !fitCamera()) fitRetry++;
-      // HUD 的昼夜切换、落地灯、氛围都是 TWEEN 补间，必须每帧推进，
-      // 不调 TWEEN.update() 的话这些补间永远不会动。
-      if (TWEEN) TWEEN.update();
-      controls.update();
-      renderer.render(scene, camera);
-    }
-    lastFrame = 0;
-    animate(performance.now());
+    // 每帧固定那几步（TWEEN 推进、controls 阻尼、渲染）在 scene-base，
+    // 这里只交代"什么时候算死"和"每帧还要额外做什么"。
+    loop = base.createLoop({
+      isAlive: function () { return !destroyed && !!renderer && !!scene; },
+      onFrame: function () { resizeWatcher.tickRetry(); },
+      TWEEN: TWEEN,
+      controls: controls,
+      camera: camera,
+      scene: scene,
+      renderer: renderer
+    });
+    loop.start();
 
-    // ---- resize ----
-    // 正交相机没有 aspect，取景由 fitCamera() 按容器尺寸重算。
-    // 容器尺寸在刚 inject HUD 之后可能还是 0，所以连续几帧重试，
-    // 直到拿到真实尺寸为止（拿到就停）。
-    var fitRetry = 0;
-    function onResize() {
-      if (!host || !renderer || !camera) return;
-      if (fitCamera()) fitRetry = 0;
-      else if (fitRetry < 30) fitRetry++;
-    }
-    resizeHandler = onResize;
-    global.addEventListener('resize', onResize);
-    onResize();
+    // 顺序和拆分前一致：先起循环，再挂 resize，最后手动跑一次取景。
+    resizeWatcher.add();
+    resizeWatcher.handler();
 
     // ---- 世界坐标 -> 屏幕像素 ----
-    // room-view-3d.js 用它把互动结果贴在点中的 3D 家具旁边
-    function projectToScreen(world) {
-      if (!world || !scene || !camera) return null;
-      var roomHost = document.querySelector('.home-room');
-      if (!roomHost) return null;
-      var v = new THREE.Vector3(world.x, world.y || 0, world.z);
-      v.project(camera);
-      // 返回的坐标要落在外层 .home-room 上（泡泡是它的子节点）。
-      // 注意别用 host（.bedroom-embed）—— 它 bottom:58px，尺寸和位置都不同。
-      var rect = roomHost.getBoundingClientRect();
-      return { x: (v.x * 0.5 + 0.5) * rect.width, y: (-v.y * 0.5 + 0.5) * rect.height };
-    }
+    // room-view-3d.js 用它把互动结果贴在点中的 3D 家具旁边。
+    // 换算公式在 scene-base，这里只交代"相对哪个元素定位"—— 必须是最
+    // 外层 .home-room（泡泡是它的子节点），不能用 host（.bedroom-embed
+    // 有 bottom:58px，尺寸和位置都不同，用它泡泡会偏）。
+    var projectToScreen = base.makeProjector({
+      THREE: THREE,
+      getCamera: function () { return camera; },
+      getScene: function () { return scene; },
+      getRectTarget: function () { return document.querySelector('.home-room'); }
+    });
     if (global.Home3DRoom) {
       global.Home3DRoom.setProjector(projectToScreen, { roomId: 'bedroom' });
     }
@@ -446,7 +559,7 @@
       // （她 3.8 单位高，从相机看过去挡得很准），后面什么都不用判了。
       if (global.HomeCharacter3DGirl && global.HomeCharacter3DGirl.root) {
         var charRoot = global.HomeCharacter3DGirl.root();
-        if (charRoot && isUnder(hit.object, charRoot)) return;
+        if (charRoot && base.isUnder(hit.object, charRoot)) return;
       }
 
       var obj = hit.object;
@@ -480,20 +593,12 @@
     controls.update();
   }
 
-  /** obj 是不是 root 的后代（自己也算）。用于把人从射线检测里排除掉。 */
-  function isUnder(obj, root) {
-    var p = obj;
-    while (p) {
-      if (p === root) return true;
-      p = p.parent;
-    }
-    return false;
-  }
-
   function destroyBedroom3D() {
     // 场景没了，投影函数必须撤掉 —— 它闭包引用了即将 dispose 的 camera
     if (global.Home3DRoom) global.Home3DRoom.clearProjector();
-    // 3D 人物挂在场景里，销毁前先摘掉，否则残留孤儿 mesh
+    // 3D 人物挂在场景里，销毁前先摘掉，否则残留孤儿 mesh。
+    // 她的 geometry 跨实例共享，所以只能走 HomeCharacter3D.dispose()，
+    // 不能进下面的 disposeSceneObjects。
     if (global.HomeCharacter3D) global.HomeCharacter3D.dispose();
     destroyed = true;
     if (initTimer) { clearTimeout(initTimer); initTimer = null; }
@@ -503,7 +608,7 @@
       geoArgs.envRenderTarget.dispose();
       geoArgs = null;
     }
-    if (animId) { cancelAnimationFrame(animId); animId = null; }
+    if (loop) { loop.stop(); loop = null; }
     var cv = document.querySelector('.home-room.bedroom canvas.bd-canvas');
     if (cv && pointerHandlers) {
       cv.removeEventListener('pointerdown', pointerHandlers.onPointerDown);
@@ -511,22 +616,14 @@
       cv.removeEventListener('pointerup', pointerHandlers.onPointerUp);
     }
     pointerHandlers = null;
-    hudUnbind();
-    if (resizeHandler) { global.removeEventListener('resize', resizeHandler); resizeHandler = null; }
+    if (hudBinder) { hudBinder.unbind(); hudBinder = null; }
+    if (resizeWatcher) { resizeWatcher.remove(); resizeWatcher = null; }
+    if (notifier) { notifier.dispose(); notifier = null; }
     if (controls) { controls.dispose(); controls = null; }
     if (renderer) { renderer.dispose(); renderer = null; }
-    if (scene) {
-      scene.traverse(function (obj) {
-        if (obj.geometry) obj.geometry.dispose();
-        if (obj.material) {
-          var list = Array.isArray(obj.material) ? obj.material : [obj.material];
-          list.forEach(function (m) { if (m) m.dispose(); });
-        }
-      });
-      scene = null;
-    }
+    base.disposeSceneObjects(scene);
+    scene = null;
     camera = null;
-    lastFrame = 0;
   }
 
   global.initBedroom3D = initBedroom3D;

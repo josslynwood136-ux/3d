@@ -38,6 +38,9 @@
   var inst = null;        // 常驻场景实例
   var IDLE_MS = 30000;    // 空闲多久才真正销毁
   var destroyTimer = null;
+  // 共用底座（取景 / 提示条 / HUD 绑定 / resize / 动画循环 / 投影 / 释放）。
+  // scene-base.js 排在本文件之前加载，这里 parse 期就能拿到。
+  var base = global.Home3DSceneBase;
 
   // 家具点击：同页了，直接通知房间层，不再 postMessage。
   function notifyFurniture(fid, worldPoint) {
@@ -116,20 +119,16 @@
     var DESIGN_EXTENT = 5.9;               // 原版垂直视野
     var camera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 100);
 
-    function fitCamera() {
-      var w = host.clientWidth, h = host.clientHeight;
-      if (!w || !h) return;
-      // 垂直范围：容器比设计更高时按比例放大，否则用设计值
-      var extentV = DESIGN_EXTENT * Math.max(1, DESIGN_H / h);
-      // 水平范围：始终保证 >= 设计宽度对应的范围
-      var extentH = Math.max(DESIGN_EXTENT * (DESIGN_W / DESIGN_H), extentV * (w / h));
-      camera.left = -extentH;
-      camera.right = extentH;
-      camera.top = extentV;
-      camera.bottom = -extentV;
-      camera.updateProjectionMatrix();
-      renderer.setSize(w, h);
-    }
+    // 取景数学在 scene-base.js（和卧室共用一份），这里只喂厨房的设计尺寸。
+    // 为什么按"设计尺寸"锁视野而不是直接吃容器宽高比，说明在 scene-base.js。
+    var fitCamera = base.makeFitCamera({
+      getHost: function () { return host; },
+      getCamera: function () { return camera; },
+      getRenderer: function () { return renderer; },
+      designW: DESIGN_W,
+      designH: DESIGN_H,
+      designExtent: DESIGN_EXTENT
+    });
     var defaultCamPos = new THREE.Vector3(12.5, 11.5, 12.5);
     var defaultLookAt = new THREE.Vector3(0, 1.45, 0);
     camera.position.copy(defaultCamPos);
@@ -191,7 +190,13 @@
         color: 0xe8f2f7, transparent: true, opacity: 0.3,
         roughness: 0.1, metalness: 0, depthWrite: false
       }),
-      fairyBulb: new THREE.MeshBasicMaterial({ color: PALETTE.fairyGlow })
+      fairyBulb: new THREE.MeshStandardMaterial({
+        color: 0xfffaea,
+        emissive: 0xffe9c4,
+        emissiveIntensity: 2.2,
+        roughness: 0.4,
+        metalness: 0
+      })
     };
 
     // -----------------------------------------------------------------
@@ -228,11 +233,6 @@
     bounceLight.position.set(-9, 7, -9);
     scene.add(bounceLight);
 
-    // 花环灯：暖色点光源，增加氛围
-    var garlandPointLight = new THREE.PointLight(0xffeed6, 0.75 * POINT_SCALE, 4.6, 2);
-    garlandPointLight.position.set(0.6, 4.25, -3.3);
-    scene.add(garlandPointLight);
-
     var roomGroup = new THREE.Group();
     scene.add(roomGroup);
 
@@ -257,9 +257,7 @@
     global.buildKitchenGeometry(api);
 
     // 灯光句柄留给动画循环调
-    var lights = {
-      garland: garlandPointLight
-    };
+    var lights = {};
 
     // -----------------------------------------------------------------
     // 交互状态
@@ -272,15 +270,12 @@
     var isOvenLit = true;      // 烤箱灯，默认亮（和原版一致）
     var isDaylight = true;
 
-    var toast = host.querySelector('#interactive-toast');
-    var toastTimer;
-    function showNotification(txt) {
-      if (!toast) return;
-      toast.textContent = txt;
-      toast.style.opacity = '1';
-      clearTimeout(toastTimer);
-      toastTimer = setTimeout(function () { toast.style.opacity = '0'; }, 2200);
-    }
+    // 提示条：显示/淡出的时序在 scene-base.js。厨房不传 defaultText ——
+    // 淡出后就空着（卧室那边要写回操作提示）。
+    var notifier = base.makeToast({
+      getHost: function () { return host; }
+    });
+    function showNotification(txt) { notifier.show(txt); }
 
     function toggleWindowAwning() {
       isWindowOpen = !isWindowOpen;
@@ -381,7 +376,7 @@
       // 人物不在 roomGroup 里（她加在 scene 上），但万一以后挪进来了也别让她挡住点击。
       if (global.HomeCharacter3DGirl && global.HomeCharacter3DGirl.root) {
         var charRoot = global.HomeCharacter3DGirl.root();
-        if (charRoot && isUnder(hit.object, charRoot)) return;
+        if (charRoot && base.isUnder(hit.object, charRoot)) return;
       }
 
       var isOven = false, isFridge = false, isWindow = false, isIsland = false;
@@ -420,34 +415,32 @@
 
     // HUD 按钮绑定。innerHTML 重建会换掉按钮节点，所以拆成函数，
     // attach() 时要能重新绑（见 rebindHudButtons）。
-    function bindHudButton(sel, fn) {
-      var el = host.querySelector(sel);
-      if (el) el.addEventListener('click', fn);
-    }
-    /** obj 是不是 root 的后代（自己也算）。用于把人从射线检测里排除掉。 */
-    function isUnder(obj, root) {
-      var p = obj;
-      while (p) {
-        if (p === root) return true;
-        p = p.parent;
-      }
-      return false;
-    }
-
+    // 厨房这组开关：不 stopPropagation（画布监听挂在 canvas 上，和 HUD
+    // 不冲突）、不记录 handler（节点随容器重建自然消亡，不会重复绑）。
+    // 卧室那边两个开关都是 true —— 差别在 scene-base.js 里做成参数了。
+    var hudBinder = base.makeHudBinder({
+      getHost: function () { return host; },
+      stopPropagation: false,
+      track: false
+    });
     function rebindHudButtons() {
-      bindHudButton('#btn-mood', toggleLightingMood);
-      bindHudButton('#btn-faucet', toggleFaucetWater);
-      bindHudButton('#btn-window', toggleWindowAwning);
-      bindHudButton('#btn-oven', toggleOvenGlow);
-      bindHudButton('#btn-reset', resetCameraView);
+      hudBinder.rebind([
+        ['#btn-mood', toggleLightingMood],
+        ['#btn-faucet', toggleFaucetWater],
+        ['#btn-window', toggleWindowAwning],
+        ['#btn-oven', toggleOvenGlow],
+        ['#btn-reset', resetCameraView]
+      ]);
     }
     rebindHudButtons();
 
-    function onResize() {
-      // 场景暂停时不调整：容器已经从文档里移走，clientWidth 是 0
-      if (document.body.contains(host)) fitCamera();
-    }
-    global.addEventListener('resize', onResize);
+    // 场景暂停时不调整：容器已经从文档里移走，clientWidth 是 0
+    var resizeWatcher = base.makeResizeWatcher({
+      getHost: function () { return host; },
+      fit: fitCamera,
+      guard: function () { return document.body.contains(host); }
+    });
+    resizeWatcher.add();
     fitCamera();
 
     // 3D 人物插槽：告诉房间层这个房间的 3D 场景在这儿
@@ -464,46 +457,46 @@
     // -----------------------------------------------------------------
     // 动画循环
     // -----------------------------------------------------------------
-    var clock = new THREE.Clock();
+    // 每帧固定那几步（TWEEN 推进、controls 阻尼、渲染）在 scene-base，
+    // 这里只交代"什么时候算活"和"每帧额外做什么"——放水滴 + 推进水粒子。
+    // 帧序和拆分前一致：固定几步 -> 这里的 onFrame -> 渲染。
     var frameCount = 0;
-    var rafId = 0;
-    var running = true;
 
     function spawnWaterDrop() {
       if (!isFaucetRunning) return;
       var p = new THREE.Mesh(waterGeo, waterMat);
       // 水龙头出水口跟着台面走。原来这里硬编码了台面的 x=0.65，
       // 台面一移位水滴就从半空落下。改成用水龙头的实际世界坐标。
-      p.position.set(0 - 0.76 + 0.28, 1.95 + 0.56, -7.5 / 2 + 1.5 / 2 + 0.22 - 0.46);
+      p.position.set(0 - 0.76, 1.95 + 0.58, -7.5 / 2 + 1.5 / 2 + 0.22 - 0.6 + 0.28);
       p.userData.vy = -0.04 - Math.random() * 0.02;
       scene.add(p);
       waterParticles.push(p);
     }
 
-    function animate() {
-      if (!running) return;
-      rafId = requestAnimationFrame(animate);
-      TWEEN.update();
-      controls.update();
+    var loop = base.createLoop({
+      // 循环自己管 running 标志；这里问它一句，等价于原来的
+      // `if (!running) return;`。
+      isAlive: function () { return loop.isRunning(); },
+      onFrame: function () {
+        frameCount++;
+        if (frameCount % 4 === 0) spawnWaterDrop();
 
-      frameCount++;
-      if (frameCount % 4 === 0) spawnWaterDrop();
-
-      for (var i = waterParticles.length - 1; i >= 0; i--) {
-        var p = waterParticles[i];
-        p.position.y += p.userData.vy;
-        if (p.position.y <= api.counterTopY - 0.22) {
-          scene.remove(p);
-          waterParticles.splice(i, 1);
+        for (var i = waterParticles.length - 1; i >= 0; i--) {
+          var p = waterParticles[i];
+          p.position.y += p.userData.vy;
+          if (p.position.y <= api.counterTopY - 0.22) {
+            scene.remove(p);
+            waterParticles.splice(i, 1);
+          }
         }
-      }
-
-      var elapsed = clock.getElapsedTime();
-      lights.garland.intensity = (0.72 + Math.sin(elapsed * 2.2) * 0.1) * POINT_SCALE;
-
-      renderer.render(scene, camera);
-    }
-    animate();
+      },
+      TWEEN: TWEEN,
+      controls: controls,
+      camera: camera,
+      scene: scene,
+      renderer: renderer
+    });
+    loop.start();
 
     // -----------------------------------------------------------------
     // 场景句柄
@@ -512,19 +505,23 @@
     // canvas 节点会连带消失），所以 attach() 要把它和 HUD 重新挂回新容器。
     // 场景数据、材质、GLB 都留在显存里，不重建。
     // -----------------------------------------------------------------
+    // 世界坐标 -> 容器内像素坐标。房间层用它把结果泡泡贴在 3D 家具旁边。
+    // 换算公式在 scene-base；厨房相对自己的容器定位（卧室是最外层
+    // .home-room —— 那间房的容器有 bottom:58px，两边不能一样）。
+    // getRectTarget 每次现取 host，attach() 换过容器才不会投错。
+    var projectFn = base.makeProjector({
+      THREE: THREE,
+      getCamera: function () { return camera; },
+      getScene: function () { return scene; },
+      getRectTarget: function () { return host; }
+    });
+
     inst = {
       scene: scene,
       camera: camera,
       renderer: renderer,
       host: host,
-
-      /** 世界坐标 -> 容器内像素坐标。房间层用它把结果泡泡贴在 3D 家具旁边。 */
-      project: function (world) {
-        var v = new THREE.Vector3(world.x, world.y || 0, world.z);
-        v.project(camera);
-        var rect = host.getBoundingClientRect();
-        return { x: (v.x * 0.5 + 0.5) * rect.width, y: (-v.y * 0.5 + 0.5) * rect.height };
-      },
+      project: projectFn,
 
       /** 切回房间：把 HUD + canvas 搬回新容器，恢复 rAF。 */
       attach: function (newHost) {
@@ -539,18 +536,15 @@
           api.host = newHost;
           rebindHudButtons();
         }
-        if (running) return;
-        running = true;
+        if (loop.isRunning()) return;
         fitCamera();
-        clock.getDelta();          // 丢掉暂停期间累积的时间，防止恢复时动画跳一大截
-        animate();
+        loop.start();
       },
 
       /** 切走房间：停 rAF，把 canvas 从文档里摘出来（数据留在显存）。 */
       suspend: function () {
-        if (!running) return;
-        running = false;
-        cancelAnimationFrame(rafId);
+        if (!loop.isRunning()) return;
+        loop.stop();
         if (global.Home3DRoom) global.Home3DRoom.clearProjector();
         if (global.HomeCharacter3D) global.HomeCharacter3D.dispose();
         if (canvas.parentNode) canvas.parentNode.removeChild(canvas);
@@ -564,24 +558,16 @@
       destroy: function () {
         if (!inst) return;
         cancelPendingDestroy();
-        running = false;
-        cancelAnimationFrame(rafId);
-        global.removeEventListener('resize', onResize);
+        if (loop) loop.stop();
+        resizeWatcher.remove();
         canvas.removeEventListener('pointerdown', onPointerDown);
         canvas.removeEventListener('pointerup', onPointerUp);
-        clearTimeout(toastTimer);
+        if (notifier) notifier.dispose();
         if (controls) controls.dispose();
         if (global.Home3DRoom) global.Home3DRoom.clearProjector();
         if (global.HomeCharacter3D) global.HomeCharacter3D.dispose();
-        scene.traverse(function (obj) {
-          if (obj.geometry) obj.geometry.dispose();
-          if (obj.material) {
-            var list = Array.isArray(obj.material) ? obj.material : [obj.material];
-            list.forEach(function (m) {
-              if (m) m.dispose();
-            });
-          }
-        });
+        // 人物已经先 dispose 掉了，剩下的才是可以整体释放的房间资源
+        base.disposeSceneObjects(scene);
         if (renderer) renderer.dispose();
         inst = null;
       }

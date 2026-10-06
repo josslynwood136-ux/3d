@@ -2043,6 +2043,27 @@ button { border: 0; cursor: pointer; }
    卡片外壳、关闭按钮、大小滑块都复用上面 2D 面板那套，
    只有"分组标题 / 姿势宫格 / 读数 / 脚注"是新的。 */
 .c3d-card{ max-width:340px; }
+.c3d-wide{ max-width:700px; padding:18px 18px 16px; overflow-y:auto; max-height:92vh; }
+.c3d-cols{ display:flex; gap:18px; text-align:left; }
+.c3d-preview{ flex:0 0 260px; }
+.c3d-preview #c3dPreview{ width:260px; height:380px; border-radius:14px;
+  background:linear-gradient(180deg,#f4efe7 0%,#e9e2d6 100%); overflow:hidden; }
+.c3d-preview canvas{ display:block; }
+.c3d-preview-hint{ font-size:11px; color:#b3aca3; margin-top:8px; text-align:center; }
+.c3d-cam-row{ display:flex; gap:6px; margin-top:8px; }
+.c3d-cam{ flex:1; border:none; background:rgba(255,255,255,.6); color:#7c736b; border-radius:9px;
+  padding:6px 0; font-size:12px; font-weight:600; cursor:pointer; transition:all .16s; font-family:inherit; }
+.c3d-cam:hover{ background:#fff; color:#5b6b63; }
+.c3d-cam.on{ background:#7c8f86; color:#fff; box-shadow:0 1px 4px rgba(0,0,0,.12); }
+.c3d-style-row{ display:flex; gap:8px; }
+.c3d-style{ flex:1; border:none; background:rgba(255,255,255,.6); color:#7c736b; border-radius:10px;
+  padding:9px 0; font-size:13px; font-weight:600; cursor:pointer; transition:all .16s; font-family:inherit; }
+.c3d-style:hover{ background:#fff; color:#5b6b63; }
+.c3d-style.on{ background:#7c8f86; color:#fff; box-shadow:0 1px 4px rgba(0,0,0,.12); }
+.c3d-controls{ flex:1; min-width:0; max-width:320px; }
+.c3d-controls .char-edit-tabs{ margin-top:0; }
+.c3d-controls .char-edit-hint{ text-align:center; }
+@media (max-width:560px){ .c3d-cols{ flex-direction:column; align-items:center; } }
 .c3d-label{ font-size:12px; color:#a39b92; text-align:left; margin:14px 0 7px; letter-spacing:.04em; }
 .c3d-info{ font-size:11px; color:#8a837b; text-align:right; margin-top:6px; font-variant-numeric:tabular-nums; }
 .c3d-pose-grid{ display:grid; grid-template-columns:repeat(3,1fr); gap:6px; }
@@ -2051,6 +2072,11 @@ button { border: 0; cursor: pointer; }
   font-family:inherit; }
 .c3d-pose:hover{ background:#fff; color:#5b6b63; }
 .c3d-pose.on{ background:#7c8f86; color:#fff; box-shadow:0 1px 4px rgba(0,0,0,.12); }
+.c3d-swatch-row{ display:flex; flex-wrap:wrap; gap:8px; }
+.c3d-sw{ width:26px; height:26px; border-radius:50%; border:2px solid rgba(0,0,0,.08);
+  cursor:pointer; padding:0; transition:transform .12s; }
+.c3d-sw:hover{ transform:scale(1.12); }
+.c3d-sw.on{ border-color:#7c8f86; box-shadow:0 0 0 2px #fff inset, 0 1px 4px rgba(0,0,0,.18); }
 .c3d-note{ font-size:11px; color:#b3aca3; margin-top:16px; padding-top:12px;
   border-top:1px solid rgba(0,0,0,.06); }
 

@@ -216,6 +216,9 @@ const defaultState = {
     activeRoom: 'living',
     char: { type: '', value: '' },
     mySize: 11,
+    hairColor: '',
+    hairStyle: 'orig',
+    outfit: { top: '', skirt: '', boots: '' },
     smallkitchenNight: false
     // 注：3D 小人下线后，avatar3d（肤色/发色/身高/披风等）已无读取方。
     // 2D 形象只依赖 char（类型+取值）和 mySize（大小），站位在 rooms[*].personPos。
@@ -470,6 +473,18 @@ function ensureStateShape(next, saved) {
   if (!next.home.char || typeof next.home.char !== 'object') next.home.char = { type: '', value: '' };
   next.home.char = normalizeHomeChar(next.home.char);
   next.home.mySize = Number(next.home.mySize) || 11;
+  if (typeof next.home.hairColor !== 'string' ||
+      (next.home.hairColor !== '' && !/^#[0-9a-fA-F]{6}$/.test(next.home.hairColor))) {
+    next.home.hairColor = '';
+  }
+  if (next.home.hairStyle !== 'alt' && next.home.hairStyle !== 'orig') next.home.hairStyle = 'orig';
+  // 换装颜色。每个部件是 ''（原色）或 #rrggbb，其余一律重置。
+  var _outfit = (next.home.outfit && typeof next.home.outfit === 'object') ? next.home.outfit : {};
+  ['top', 'skirt', 'boots'].forEach(function (part) {
+    var v = _outfit[part];
+    _outfit[part] = (typeof v === 'string' && (v === '' || /^#[0-9a-fA-F]{6}$/.test(v))) ? v : '';
+  });
+  next.home.outfit = _outfit;
   if (!Array.isArray(next.albums)) next.albums = [];
   if (Array.isArray(next.album) && next.album.length && !next.albums.length) {
     next.albums = [{ id: 'default', name: '默认相册', photos: next.album.map((p, i) => ({ id: 'p' + i, url: p.url, caption: p.caption || '', date: p.date || '' })) }];

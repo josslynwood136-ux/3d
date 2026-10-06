@@ -522,12 +522,12 @@
         const faucetMesh = new THREE.Mesh(new THREE.TubeGeometry(faucetCurve, 24, 0.038, 12, false), mats.chrome);
         faucetGroup.add(faucetMesh);
 
-        const fLever = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.08), mats.chrome);
-        fLever.rotation.x = Math.PI / 2;
-        fLever.position.set(-0.08, 0.16, 0);
+        const fLever = new THREE.Mesh(new RoundedBoxGeometry(0.18, 0.055, 0.07, 2, 0.025), mats.chrome);
+        fLever.rotation.z = -0.12;   // 微微往下压的姿势，顺手一点
+        fLever.position.set(-0.1, 0.18, 0);
         faucetGroup.add(fLever);
-        faucetGroup.rotation.y = Math.PI;
-        faucetGroup.position.set(-0.76, cH + 0.06, -0.46);
+        faucetGroup.rotation.y = -Math.PI / 2;   // 壶嘴朝前下方（朝水槽）
+        faucetGroup.position.set(-0.76, cH + 0.06, -0.6);   // 往后挪一点，别压水槽边上
         counterGroup.add(faucetGroup);
 
         // Lower open shelf with woven vegetable crate & pumpkins/potatoes

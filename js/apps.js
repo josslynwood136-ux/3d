@@ -1170,20 +1170,20 @@ async function delHabit(id) {
 
 // ---------- 家园 ----------
 // 家园代码已整体拆到 js/home/：
-//   index.js        入口与房间调度（renderHome / switchRoom / Home 命名空间）
-//   rooms-2d.js     2D 房间：庭院种植 + 房间表补全
-//   art.js          2D 房间的家具绘图
-//   furniture.js    家具互动（泡泡 / 结果 / 记录 / 亲密度）
-//   character-2d.js 2D 人物（DOM 覆盖层 + 形象编辑面板）
-//   character-3d.js 3D 人物插槽（目前空实现，等接模型）
+//   index.js          入口与房间调度（renderHome / switchRoom / Home 命名空间）
+//   rooms.js          房间注册表（2D/3D 类型唯一来源）
+//   room-data.js      老存档补全（ensureHomeRooms）
+//   rooms-2d.js       庭院种植玩法
+//   art.js            2D 房间的家具绘图
+//   room-view-2d.js   2D 房间的泡泡 / 结果定位
+//   room-view-3d.js   3D 房间的泡泡 / 结果定位（世界坐标投影）
+//   furniture.js      家具互动（泡泡 / 结果 / 记录 / 亲密度）
+//   character-2d.js   2D 人物（DOM 覆盖层 + 形象编辑面板）
+//   character-3d.js   3D 人物插槽（adapter 契约）
+//   character-3d-girl.js   插槽的实现（GLB 模型 + Mixamo 骨架 + 走路）
+//   rooms-3d/         卧室与小厨房：-scene.js 生命周期、-geometry.js 场景搭建、-hud.js HUD
 //
-// 本文件里剩下的 initBedroom3D / destroyBedroom3D 是卧室 3D 场景，
-// 第 2 步会搬走：小厨房改成同页 three.js（解决每次切换加载很久），
-// 卧室场景一并收进 js/home/rooms-3d.js，拆掉这个 765 行的巨函数。
-
-
-// 卧室 3D 场景 moved to js/home/rooms-3d/bedroom-scene.js + bedroom-geometry.js
-// (initBedroom3D was an 840-line function mixed into a 6000-line file)
+// 本文件不再包含任何家园场景代码。
 
 // switchRoom 已移至 js/home/index.js
 // 家具互动（openFurniture / doFurnitureAction / openRoomBubble 等）已移至 js/home/furniture.js

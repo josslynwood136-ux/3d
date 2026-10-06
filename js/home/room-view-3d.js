@@ -13,9 +13,9 @@
  * 场景尚未就绪时（WebGL 上下文还在建、模型还在下载），
  * 动作泡泡退化成房间中央固定位置 —— 不能因为拿不到投影就不给反馈。
  *
- * 卧室的场景在 apps.js 的 initBedroom3D 里，小厨房目前在 iframe 里，
- * 两者都通过下面这组钩子把"世界坐标 -> 屏幕像素"的换算交进来。
- * 第 2 步小厨房转同页后，两边的调用方式就完全一致了。
+ * 卧室和小厨房的场景在 rooms-3d/{bedroom,kitchen}-scene.js，
+ * 两者都通过下面这组钩子把"世界坐标 -> 屏幕像素"的换算交进来，
+ * 调用方式完全一致（各自在场景就绪时 setProjector，销毁时 clearProjector）。
  * ============================================================ */
 (function (global) {
   'use strict';
@@ -95,6 +95,11 @@
         setTimeout(function () { bub.classList.add('show'); }, i * 60);
       });
 
+      // 和 room-view-2d.js **共用** global._homeBubbleTimer，别拆成私有。
+      // 上面 showActions 开头那句 closeActions 预清理，之所以能顺带取消掉
+      // 旧房间（2D）挂着的倒计时，靠的就是两边写同一个槽。各存各的会留下
+      // 一个没人管的孤儿倒计时，到点按 .bath-bubble 满页面删，会把这里刚
+      // 摆出来的泡泡一起删掉。完整说明见 room-view-2d.js 的同名注释。
       global._homeBubbleTimer = setTimeout(function () {
         Home3DRoom.closeActions();
       }, 5000);

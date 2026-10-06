@@ -76,7 +76,7 @@
  *   所以直接双击 index.html 看不到人物，要用 Live Server 之类起服务
  *   （项目根目录有 serve.js）。
  *
- * 已知技术债：厨房 scene 复用了
+ * 已知技术债：厨房 scene 复用
  * ------------------------------------------------------------
  * kitchen-scene.js 的小厨房 scene 用 `inst` 缓存（30 秒内切回直接 attach 复用，
  * 正常情况下不销毁）。而人物是跟随房间切换销毁的（switchRoom → destroyBedroom3D
@@ -180,9 +180,9 @@
     footL:  'CC_Base_L_Foot_06',   footR:  'CC_Base_R_Foot_022',
 
     clavL: 'CC_Base_L_Clavicle_049', clavR: 'CC_Base_R_Clavicle_077',
-    armL:  'CC_Base_L_Upperarm_050', armR:  'CC_Base_R_Upperarm_078',
-    foreL: 'CC_Base_L_Forearm_051',  foreR:  'CC_Base_R_Forearm_079',
-    handL: 'CC_Base_L_Hand_055',     handR:  'CC_Base_R_Hand_083'
+    armL:  'CC_Base_L_Upperarm_050', armR: 'CC_Base_R_Upperarm_078',
+    foreL: 'CC_Base_L_Forearm_051',  foreR: 'CC_Base_R_Forearm_079',
+    handL: 'CC_Base_L_Hand_055',     handR: 'CC_Base_R_Hand_083'
   };
 
   // 键 → 左右两根骨骼。'…LR' 的键展开时右边那根自动把方向的 X 取反
@@ -318,6 +318,23 @@
   var cached = null;    // 解析好的模型，全页面复用一次
   var loading = null;   // 正在进行的 Promise，避免并发重复下载
   var live = null;      // 当前挂在场景里的实例
+
+  // ── 走路动画 ───────────────────────────
+  // walking.fbx 是 Mixamo 免费下载的普通走路循环。
+  // Mixamo 骨架比 CC3+ 骨架多/少几根，又用不同的骨名；
+  // remapWalkClip 把它的轨道映射到我们的骨名上，并做绑姿归一化：
+  //   ourQ = ourBind * inverse(mixBind) * mixQ
+  // 位置轨道只保留 mixamorigHips 的 Y（上下起伏），X/Z 清零——
+  // 前进交给 moveTo + walkSpeed 控制。
+  var wk_state = {
+    clip: null,   // remap 后可在 GLB 上直接播
+    mixer: null,
+    action: null,
+    loadFailed: false,
+    fbxRoot: null // walking.fbx 的原始 scene（不渲染）
+  };
+  var _fbxBindLocal = {};  // Mixamo 骨架绑姿本地旋转
+  var _fbxBindPos = {};    // Mixamo 骨架绑姿本地位置
   var rafId = 0;
   var lastT = 0;
   var phase = 0;
@@ -331,7 +348,7 @@
   // 到达后才切回站立姿势。没有它这里 stand/walk 姿势只在手动切的时候才会变。
   var walking = false;
   var walkTarget = null;     // {x, y, z}
-  var walkSpeed = 1.6;       // 更慢，降低「蹬步太大」的感觉
+  var walkSpeed = 1.7;       // 和 walking.fbx 的步幅/周期对上（1.63m ÷ 0.97s ≈ 1.68 m/s），太大就会脚滑步
   var walkEnv = 0;           // 摆幅包络：走起时 0→1，到了以后 1→0
   var walkFade = false;      // 是否在衰减振幅（到达终点后慢慢归零，再切回站立）
 
@@ -366,6 +383,8 @@
       new global.GLTFLoader().load(MODEL_URL, function (gltf) {
         try {
           cached = prepare(THREE, gltf);
+          // 动作包也顺手开一次加载：有就用真实步态，没有就退化到程序合成
+          loadWalkClip(THREE);
           loading = null;
           resolve(cached);
         } catch (e) {
@@ -385,6 +404,208 @@
     return loading;
   }
 
+  // Mixamo 骨架名 → 我们 GLB 模型的实际骨骼名。
+  // Mixamo 手指有 4 节，我们模型只有 3 节，第 4 节（末节球）不映射、直接丢掉。
+  var MIX_TO_CC = {
+    // 脊柱 / 头
+    mixamorigHips: 'CC_Base_Pelvis_03',
+    mixamorigSpine: 'CC_Base_Waist_033',
+    mixamorigSpine1: 'CC_Base_Spine01_034',
+    mixamorigSpine2: 'CC_Base_Spine02_035',
+    mixamorigNeck: 'CC_Base_NeckTwist01_036',
+    mixamorigHead: 'CC_Base_Head_038',
+    // 左腿
+    mixamorigLeftUpLeg: 'CC_Base_L_Thigh_04',
+    mixamorigLeftLeg: 'CC_Base_L_Calf_05',
+    mixamorigLeftFoot: 'CC_Base_L_Foot_06',
+    mixamorigLeftToeBase: 'CC_Base_L_ToeBase_08',
+    // 右腿
+    mixamorigRightUpLeg: 'CC_Base_R_Thigh_019',
+    mixamorigRightLeg: 'CC_Base_R_Calf_020',
+    mixamorigRightFoot: 'CC_Base_R_Foot_022',
+    mixamorigRightToeBase: 'CC_Base_R_ToeBase_023',
+    // 左臂
+    mixamorigLeftShoulder: 'CC_Base_L_Clavicle_049',
+    mixamorigLeftArm: 'CC_Base_L_Upperarm_050',
+    mixamorigLeftForeArm: 'CC_Base_L_Forearm_051',
+    mixamorigLeftHand: 'CC_Base_L_Hand_055',
+    // 右臂
+    mixamorigRightShoulder: 'CC_Base_R_Clavicle_077',
+    mixamorigRightArm: 'CC_Base_R_Upperarm_078',
+    mixamorigRightForeArm: 'CC_Base_R_Forearm_079',
+    mixamorigRightHand: 'CC_Base_R_Hand_083',
+    // 左手指（Mixamo 每指 4 节，我们取前 3 节）
+    mixamorigLeftHandThumb1: 'CC_Base_L_Thumb1_068',
+    mixamorigLeftHandThumb2: 'CC_Base_L_Thumb2_069',
+    mixamorigLeftHandThumb3: 'CC_Base_L_Thumb3_070',
+    mixamorigLeftHandIndex1: 'CC_Base_L_Index1_065',
+    mixamorigLeftHandIndex2: 'CC_Base_L_Index2_066',
+    mixamorigLeftHandIndex3: 'CC_Base_L_Index3_067',
+    mixamorigLeftHandMiddle1: 'CC_Base_L_Mid1_062',
+    mixamorigLeftHandMiddle2: 'CC_Base_L_Mid2_063',
+    mixamorigLeftHandMiddle3: 'CC_Base_L_Mid3_064',
+    mixamorigLeftHandRing1: 'CC_Base_L_Ring1_059',
+    mixamorigLeftHandRing2: 'CC_Base_L_Ring2_060',
+    mixamorigLeftHandRing3: 'CC_Base_L_Ring3_061',
+    mixamorigLeftHandPinky1: 'CC_Base_L_Pinky1_056',
+    mixamorigLeftHandPinky2: 'CC_Base_L_Pinky2_057',
+    mixamorigLeftHandPinky3: 'CC_Base_L_Pinky3_058',
+    // 右手指
+    mixamorigRightHandThumb1: 'CC_Base_R_Thumb1_090',
+    mixamorigRightHandThumb2: 'CC_Base_R_Thumb2_091',
+    mixamorigRightHandThumb3: 'CC_Base_R_Thumb3_092',
+    mixamorigRightHandIndex1: 'CC_Base_R_Index1_093',
+    mixamorigRightHandIndex2: 'CC_Base_R_Index2_094',
+    mixamorigRightHandIndex3: 'CC_Base_R_Index3_095',
+    mixamorigRightHandMiddle1: 'CC_Base_R_Mid1_087',
+    mixamorigRightHandMiddle2: 'CC_Base_R_Mid2_088',
+    mixamorigRightHandMiddle3: 'CC_Base_R_Mid3_089',
+    mixamorigRightHandRing1: 'CC_Base_R_Ring1_084',
+    mixamorigRightHandRing2: 'CC_Base_R_Ring2_085',
+    mixamorigRightHandRing3: 'CC_Base_R_Ring3_086',
+    mixamorigRightHandPinky1: 'CC_Base_R_Pinky1_096',
+    mixamorigRightHandPinky2: 'CC_Base_R_Pinky2_097',
+    mixamorigRightHandPinky3: 'CC_Base_R_Pinky3_098'
+  };
+
+  function loadWalkClip(THREE) {
+    if (wk_state.clip || wk_state.loadFailed || !global.FBXLoader) return;
+    new global.FBXLoader().load('js/home/walking.fbx', function (fbx) {
+      try {
+        // 记录 Mixamo 骨架的绑姿，后续做归一化用
+        _fbxBindLocal = {};
+        _fbxBindPos = {};
+        fbx.updateMatrixWorld(true);
+        fbx.traverse(function (c) {
+          if (c.isBone && c.name) {
+            _fbxBindLocal[c.name] = c.quaternion.clone();
+            _fbxBindPos[c.name] = c.position.clone();
+          }
+        });
+
+        var clips = fbx.animations || [];
+        if (!clips.length) { wk_state.loadFailed = true; return; }
+        var clip = null;
+        for (var i = 0; i < clips.length; i++) {
+          if (clips[i] && clips[i].duration > 0.001) { clip = clips[i]; break; }
+        }
+        if (!clip) { wk_state.loadFailed = true; return; }
+
+        wk_state.clip = remapWalkClip(THREE, clip, fbx);
+        wk_state.mixer = new THREE.AnimationMixer(cached.model);
+        wk_state.action = wk_state.mixer.clipAction(wk_state.clip);
+        wk_state.action.setLoop(THREE.LoopRepeat, Infinity);
+        wk_state.action.timeScale = 1.0;   // 步频和前进速度匹配
+        wk_state.action.play();
+        console.info('[home/character-3d-girl] walk Clip 载入：' + clip.name +
+          '（' + clip.duration.toFixed(2) + 's，' + wk_state.clip.tracks.length + ' 条轨道）');
+      } catch (e) {
+        wk_state.loadFailed = true;
+        console.warn('[home/character-3d-girl] walk Clip 异常', e);
+      }
+    }, undefined, function (e) {
+      wk_state.loadFailed = true;
+      console.warn('[home/character-3d-girl] walk.fbx 下载失败', e);
+    });
+  }
+
+  // FBX 骨名 → 本地 GLB 骨名（支持 Mixamo 和 CC 风格）
+  function _boneLocalName(fbxName) {
+    if (!cached) return null;
+    if (cached.bones[fbxName]) return fbxName;
+    if (fbxName === 'root' && cached.bones['CC_Base_BoneRoot_01']) return 'CC_Base_BoneRoot_01';
+    if (MIX_TO_CC && MIX_TO_CC[fbxName]) return MIX_TO_CC[fbxName];
+    // fallback: 去掉末尾 _数字 找前缀
+    var base = fbxName.replace(/_\d+$/, '');
+    var keys = Object.keys(cached.bones);
+    for (var i = 0; i < keys.length; i++) {
+      if (keys[i].replace(/_\d+$/, '') === base) return keys[i];
+    }
+    return null;
+  }
+
+  // 把 Mixamo 骨轨道映射到我们 GLB 的骨名上，并做绑姿归一化：
+  //   ourQ = ourBind * inverse(mixBind) * mixQ
+  // 位置轨道只保留 mixamorigHips 的 Y（上下起伏），X/Z 清零——
+  // 前进交给 moveTo + walkSpeed 控制。
+  function remapWalkClip(THREE, clip, fbxRoot) {
+    var out = [];
+    var src = clip.tracks || [];
+    for (var i = 0; i < src.length; i++) {
+      var t = src[i];
+      var dot = t.name.indexOf('.');
+      var node = dot >= 0 ? t.name.substring(0, dot) : t.name;
+      var prop = dot >= 0 ? t.name.substring(dot) : '';
+      var local = _boneLocalName(node);
+      if (!local) continue;
+
+      // 胳膊用我们的静态站姿，不用 Mixamo（它的肩轴体系与 CC 差太多）；
+      // 肩/臂/手整一条子链全部丢掉，避免手举起来的问题}
+      if (/Upperarm|Forearm|Hand|Clavicle/.test(local)) continue;
+
+      // 位置轨道：只保留 Hips 的 Y 起伏
+      if (prop === '.position') {
+        if (node !== 'mixamorigHips') continue;
+        var modelBindPos = cached.bindLocalP[local];
+        var fbxBindPos = _fbxBindPos[node];
+        if (!modelBindPos || !fbxBindPos) continue;
+        var pv = t.values;
+        var pc = new Float32Array(pv.length);
+        for (var v = 0; v < pv.length; v += 3) {
+          pc[v] = modelBindPos.x;
+          pc[v + 1] = pv[v + 1] - fbxBindPos.y + modelBindPos.y;
+          pc[v + 2] = modelBindPos.z;
+        }
+        out.push(new THREE.VectorKeyframeTrack(local + '.position', t.times.slice(), pc));
+        continue;
+      }
+
+      // 缩放轨道我们不要
+      if (prop !== '.quaternion') continue;
+
+      var modelBind = cached.bindLocalQ[local];
+      var fbxBind = _fbxBindLocal[node];
+      if (!modelBind || !fbxBind) continue;
+
+      // 上半身跟 Mixamo 的局部轴体系差太多，直接按它原样解出来会左右摇晃；
+      // 把 delta（mixBind⁻¹·mixQ）按 35% 阻尼回去，只保留轻微的转肩。
+      var UPPER_BODY_DAMP = 0.35;
+      var isUpper = /Hips|Spine|Waist|Neck|Head/.test(local);
+
+      var values = t.values;
+      var corrected = new Float32Array(values.length);
+      var identity = new THREE.Quaternion();
+      for (var v2 = 0; v2 < values.length; v2 += 4) {
+        var qm = new THREE.Quaternion(values[v2], values[v2 + 1], values[v2 + 2], values[v2 + 3]);
+        var delta = fbxBind.clone().invert().multiply(qm);
+        if (isUpper) {
+          delta.slerp(identity, 1 - UPPER_BODY_DAMP);
+        }
+        var q = modelBind.clone().multiply(delta);
+        corrected[v2] = q.x;
+        corrected[v2 + 1] = q.y;
+        corrected[v2 + 2] = q.z;
+        corrected[v2 + 3] = q.w;
+      }
+      out.push(new THREE.QuaternionKeyframeTrack(local + '.quaternion', t.times.slice(), corrected));
+    }
+    return new THREE.AnimationClip(clip.name, clip.duration, out);
+  }
+
+  function ensureWalkMixer(THREE) {
+    if (!wk_state.clip || wk_state.mixer) return;
+    if (!cached) return;
+    wk_state.mixer = new THREE.AnimationMixer(cached.model);
+    wk_state.action = wk_state.mixer.clipAction(wk_state.clip);
+    wk_state.action.setLoop(THREE.LoopRepeat, Infinity);
+    wk_state.action.timeScale = 1.0;
+    wk_state.action.play();
+  }
+
+  function stopWalkAction() {
+    if (wk_state.action) { wk_state.action.stop(); }
+  }
+
   function prepare(THREE, gltf) {
     var model = gltf.scene || (gltf.scenes && gltf.scenes[0]);
     if (!model) throw new Error('GLB 里没有 scene');
@@ -399,7 +620,7 @@
     box.getCenter(mid);
     // 只记下"模型本身多高"，**不**在这里乘房间比例。
     // prepare() 是全局缓存、整个页面只跑一次，但房间有两个、比例还不一样
-    // （卧室 2.30 / 厨房 2.00）。在这里就把比例乘进去的话，
+    //（卧室 2.30 / 厨房 2.00）。在这里就把比例乘进去的话，
     // 谁先进房间谁的缩放就被永久烙进缓存 —— 第二个房间直接套用第一个的比例。
     // 所以缩放统一留给 mount()，那时候才知道是哪个房间。
     var rawHeight = Math.max(1e-4, size.y);
@@ -451,7 +672,7 @@
 
       // bind 时这根骨骼指向哪：取子骨骼里离得最远的那根。
       // 不能取第一个 —— CC 骨架有一堆 xxx_0 和 ShareBone，
-      // 它们和父骨骼几乎重合，方向算出来是噪声。
+      // 和父骨骼几乎重合，方向算出来是噪声。
       var far = null, farD = 0;
       b.getWorldPosition(wb);
       for (var j = 0; j < b.children.length; j++) {
@@ -462,16 +683,16 @@
 
       if (far && farD > 1e-5) {
         far.getWorldPosition(wp);
-        // 必须 clone —— wp 是循环外的复用临时对象，直接赋给 bindDir[name]
-        // 会让 172 根骨骼共用同一个 Vector3，全被最后一次的值覆盖。
+        // 归一化一次存下来，之后172 根骨骼都不用再 clone Vector3 —— 这是 prepare 里最重的部分。
         bindDir[name] = wp.clone().sub(wb).normalize();
       } else {
-        // 叶子骨骼没有子骨骼，用自己的本地 +y 轴
+        // 没有子骨骼（叶节点）就用它自己的 +y 朝向兜底
         bindDir[name] = self.set(0, 1, 0).applyQuaternion(bindWorldQ[name]).normalize().clone();
       }
     });
 
-    // 关键骨骼缺一根，姿势就会静默失效 —— 显式报出来
+    // 姿势用到的骨名里有没有对不上的 —— 对不上会静默失效（那根骨保持 bind），
+    // 所以打一条警告，省得"怎么摆手没动"。
     var missing = [];
     Object.keys(PAIR).forEach(function (key) {
       PAIR[key].forEach(function (n) { if (!bones[n]) missing.push(n); });
@@ -480,15 +701,15 @@
       var n = BONE[key];
       if (!bones[n] && missing.indexOf(n) < 0) missing.push(n);
     });
-    if (missing.length) console.warn('[home/character-3d-girl] 少了骨骼：' + missing.join(' / '));
+    if (missing.length) console.warn('[home/character-3d-girl] 缺少这些骨骼：' + missing.join(' / '));
 
-    // --- 4. 阴影和视锥剔除 ---
+    // --- 4. 网格的阴影与剔除设置 ---
     model.traverse(function (o) {
       if (!o.isMesh) return;
       o.castShadow = true;
       o.receiveShadow = false;
-      // 蒙皮网格的包围球常常算不准（18k 面本来也不贵），
-      // 关掉视锥剔除省得出现"人走着走着凭空消失"。
+      // 18k 面的小模型，frustumCulled 误剔的收益远小于风险，直接关掉。
+      // 之前开着，人物偶尔在房间边缘整体消失，"frustumCulled" 这行注释是这么加的。
       o.frustumCulled = false;
     });
 
@@ -502,14 +723,14 @@
       bindLocalQ: bindLocalQ,
       bindLocalP: bindLocalP,
       bindDir: bindDir,          // 只给 debugBones 用；applyPose 里是实时算的
-      rawHeight: rawHeight,   // 模型自身高度；房间比例留给 mount() 乘
+      rawHeight: rawHeight,   // 归一化缩放的分母，mount() 里用它算 holder.scale
       bbox: { min: box.min.clone(), max: box.max.clone(), size: size.clone() },
-      bboxCenter: mid.clone()   // syncHolder 要用
+      bboxCenter: mid.clone()   // syncHolder 用它居中
     };
   }
 
   // ------------------------------------------------------------
-  // 姿势
+  // 规则展开
   // ------------------------------------------------------------
 
   /** 把一条规则展开成 [{ bone, dir, pos, rot }]。 */
@@ -525,8 +746,7 @@
       if (names.length === 1) {
         out.push({ bone: names[0], dir: dir, pos: pos, rot: rot });
       } else {
-        // LR 的镜像只对方向和位移的 x 分量有意义；
-        // 绕竖轴的旋转量左右是反的，要取反，方向才镜像得对称。
+        // LR 键：右边那根自动镜像 —— x 取反、绕轴的弧度取反
         out.push({ bone: names[0], dir: dir, pos: pos, rot: rot });
         out.push({
           bone: names[1],
@@ -539,7 +759,7 @@
     return out;
   }
 
-  /** 按层级深度排序，保证父骨骼先处理。找不到的骨骼丢掉。 */
+  /** 按骨骼在层级里的深度排序，保证父骨先摆，子骨才读到新的父朝向。 */
   function byDepth(bones, list) {
     var mapped = [];
     for (var i = 0; i < list.length; i++) {
@@ -553,18 +773,14 @@
     return mapped.map(function (x) { return x.rule; });
   }
 
-  /* 摆姿势。
+  /* 摆姿势（applyPose）——这里有三个必须知道的前提，写下来免得再踩：
    *
-   * 这个函数是整个文件最容易写错的地方，踩过的坑记在下面 —— 别再改回去：
-   *
-   * 1) 别用"父骨骼的 bind 世界朝向"去反推子骨骼的局部朝向。
-   *    这个模型（Reallusion 的 Maya 导出）在骨骼之间插了 _scaleCompensation
-   *    中间节点：CC_Base_L_Upperarm_050 的父节点不是锁骨，而是
-   *    CC_Base_L_Upperarm_050_scaleCompensation。那些节点不是 Bone，
-   *    按名字查 bindWorldQ 一查就是 null，于是走错分支，多转了 134°，
-   *    手臂直接甩到身体前面去。
-   *    现在改成：每摆一根就读一次 b.parent 的**当前**世界朝向。
-   *    getWorldQuaternion 内部会 updateWorldMatrix，父节点刚摆完也读得到。
+   * 1) 不能假设某根骨骼的 parent 是另一根 Bone。
+   *    Reallusion / Maya 的导出会在父子之间插 _scaleCompensation 这种
+   *    非 Bone 节点：CC_Base_L_Upperarm_050 的父节点不是锁骨，而是
+   *    CC_Base_L_Upperarm_050_scaleCompensation。按名字去找父骨骼的
+   *    bindWorldQ 在这里会拿到 null（下面 line 134 那次就是这么炸的）。
+   *    所以这里只用"父节点的**世界**四元数"，不查它是哪根骨。
    *
    * 2) bind 方向必须**实时**算，不能用 prepare 时存下来的那份。
    *    prepare 时 turn.rotation.y 还是 0，mount 之后才设成 DEFAULT_YAW，
@@ -578,6 +794,18 @@
     var THREE = m.THREE;
     var def = POSES[name] || POSES.stand;
 
+    // 已装真实 walk Clip 时，用 mixer 驱动我们自己的 GLB 骨骼，不走这套方向相加
+    if (name === 'walk' && wk_state.clip) {
+      if (!walking) { stopWalkAction(); return; }
+      ensureWalkMixer(m.THREE);
+      if (wk_state.action && !wk_state.action.isRunning()) {
+        wk_state.action.reset();
+        wk_state.action.play();
+      }
+      return;
+    }
+    if (name !== 'walk') stopWalkAction();
+
     // 还原 bind。用 copy() 不 clone()：走路时每帧要跑十几次。
     var names = Object.keys(m.bones);
     for (var i = 0; i < names.length; i++) {
@@ -585,11 +813,10 @@
       bn.quaternion.copy(m.bindLocalQ[names[i]]);
       bn.position.copy(m.bindLocalP[names[i]]);
     }
-    // 还原完先刷一次矩阵。下面每次读 getWorldPosition 都会自己刷祖先，
-    // 但显式刷一遍更清楚，也少几次重复计算。
     m.place.updateWorldMatrix(true, true);
 
-    var rules = expand(def.rules);
+    var rules;
+    rules = expand(def.rules);
     if (def.swing && typeof t === 'number') rules = rules.concat(expand(walkRules(t, walkEnv)));
     if (def.offsets) {
       for (var o = 0; o < def.offsets.length; o++) {
@@ -705,6 +932,65 @@
   }
 
   // ------------------------------------------------------------
+  // 地面探测 / 避障
+  // ------------------------------------------------------------
+
+  // 从上往下打一条射线，找脚下真正的表面高度。
+  // 地板顶面是 y=0，但地毯、蒲团、矮柜这些浮在地板上，写死 y=0 会陷进去。
+  // surfaceY() 给 mount 时找站位用，isFloorHit() 给房间点地板时用。
+  var _down = null;
+
+  function surfaceY(THREE, scene, x, z, fromY) {
+    if (!THREE || !scene) return 0;
+    if (!_down) _down = new THREE.Vector3(0, -1, 0);
+    var rc = new THREE.Raycaster();
+    rc.set(new THREE.Vector3(x, (fromY || 40), z), _down);
+    rc.far = 80;
+    var hits = rc.intersectObjects(scene.children, true);
+    // 第一个命中里挑最近的、且不比出发点低太多的（排除打到地台背面）
+    for (var i = 0; i < hits.length; i++) {
+      if (hits[i].object && hits[i].object.userData && hits[i].object.userData.noFloor) continue;
+      return hits[i].point.y;
+    }
+    return 0;
+  }
+
+  function isFloorHit(THREE, scene, x, z) {
+    if (!THREE || !scene) return 0;
+    var y = surfaceY(THREE, scene, x, z);
+    return isFinite(y) ? y : 0;
+  }
+
+  // 往前走一段会不会撞到东西：从脚下往上打一条短射线探障碍。
+  // len 越长探得越远。家具都会挡住射线，地板不会（因为射线起点抬到腰高）。
+  function directCheck(THREE, p, vx, vz, len) {
+    if (!THREE || !live || !live.scene) return true;
+    var rc = new THREE.Raycaster();
+    var start = new THREE.Vector3(
+      p.x + vx * 0.15, p.y + 0.9, p.z + vz * 0.15
+    );
+    rc.set(start, new THREE.Vector3(vx, 0, vz));
+    rc.far = Math.max(0.2, len);
+    var hits = rc.intersectObjects(live.scene.children, true);
+    for (var i = 0; i < hits.length; i++) {
+      var o = hits[i].object;
+      if (!o || !o.visible) continue;
+      // 人物自己的 mesh 不算障碍
+      if (o === live.model || (live.place && isDescendant(o, live.place))) continue;
+      // 薄纱 / 玻璃 / 窗 这些透明层不算，撞上也不该停
+      if (o.material && o.material.transparent && o.material.opacity < 0.6) continue;
+      return false;
+    }
+    return true;
+  }
+
+  function isDescendant(node, ancestor) {
+    var p = node;
+    while (p) { if (p === ancestor) return true; p = p.parent; }
+    return false;
+  }
+
+  // ------------------------------------------------------------
   // 自带循环：走路摆动 / 挥手。房间的 animate loop 不会调这里。
   // ------------------------------------------------------------
 
@@ -714,6 +1000,11 @@
     var dt = lastT ? Math.min(0.05, (now - lastT) / 1000) : 0;
     lastT = now;
     if (!live || !live.place.parent) return;
+
+    // 真实走路 Clip 在播的话，直接更新这个 GLB 上的骨骼
+    if (wk_state.action && wk_state.action.isRunning()) {
+      wk_state.mixer.update(dt);
+    }
 
     // ── 走动推进 ──────────────────
     if (walking && walkTarget) {
@@ -731,6 +1022,7 @@
         walking = false;
         walkTarget = null;
         walkFade = true;     // 到这里以后让振幅慢慢归到 0，再切回站立
+        stopWalkAction();   // 到了，停止走路循环
       } else {
         var THREE = global.THREE;
         // 实时避障：朝目标方向试 probe，若被挡住就在左右扇形里挑一个
@@ -808,7 +1100,7 @@
     }
   }
 
-  // 走动结束时点的点在 walkTarget 上，到了后要把它记到 place 上防污染（防御性写法）
+  // 走到目标时把 walkTarget 置 null；房间要判断"走完了"时用这两只小函数
   function walkingTargetNullSafe() {
     walkTarget = null;
   }
@@ -829,22 +1121,22 @@
   }
 
   // ------------------------------------------------------------
-  // 适配器
+  // 适配层
   // ------------------------------------------------------------
 
   function sizeScale() {
     return mySize() / MY_SIZE_DEFAULT;
   }
 
-  // 可选姿势的中文标签。编辑面板要显示按钮文字，语义和 character-2d.js
-  // 的 home-pose-* 一套取值对齐。
+  // 换姿势时的中文提示。HUD 按钮要显示，得和 character-2d.js
+  // 的 home-pose-* 一组取值配套。
   var POSE_LABELS = {
     stand: '站立', walk: '走路', sit: '坐下',
     crouch: '蹲下', wave: '挥手', sleep: '睡觉'
   };
 
   var adapter = {
-    // 编辑面板读这两个来画按钮 / 显示当前值
+    // 房间层从这里读当前状态 / 显示当前姿势
     poses: Object.keys(POSES).map(function (k) {
       return { id: k, label: POSE_LABELS[k] || k };
     }),
@@ -914,15 +1206,16 @@
           '，' + Object.keys(m.bones).length + ' 根骨骼）');
         return true;
       }).catch(function (e) {
-        live = null;
-        say('error', (e && e.message) ? e.message : String(e));
-        return false;      // 降级：房间照常，只是没有人
+        say('error', e && e.message ? e.message : String(e));
+        return false;
       });
     },
 
+    /**
+     * 瞬移。只改位置不播走路动画 —— 初始化、切房间时用。
+     * 要"走过去"（带手脚摆动）用 moveTo。
+     */
     setPosition: function (world) {
-      // 写 place，不是 holder —— holder.position.y 是"脚底贴地"的归一化偏移，
-      // 被覆盖的话人会浮起来（曾经踩过，见 prepare 里那段注释）。
       if (!live || !world) return;
       if (world.x != null) live.place.position.x = world.x;
       if (world.y != null) live.place.position.y = world.y;
@@ -1010,225 +1303,73 @@
         console.info('[home/character-3d-girl] roomScale -> ' + config.roomScale +
           '（身高 ' + (BASE_H * clamped / MY_SIZE_DEFAULT * config.roomScale).toFixed(2) + ' 房间单位）');
       }
-      // 朝向在 turn 上，改它不影响已经摆好的姿势
-      if (typeof config.yaw === 'number') {
-        live.turn.rotation.y = config.yaw;
-        live.place.updateWorldMatrix(true, true);
-      }
-      if (config.pose && POSES[config.pose]) {
-        currentPose = config.pose;
-        applyPose(currentPose, currentPose === 'stand' ? undefined : phase);
-      }
 
-      if (!warnedConfig) {
-        var known = { mySize: 1, size: 1, height: 1, yaw: 1, pose: 1, roomScale: 1 };
-        var extra = [];
-        for (var k in config) if (!known[k]) extra.push(k);
-        if (extra.length) {
-          warnedConfig = true;
-          console.info('[home/character-3d-girl] setConfig 忽略了：' + extra.join(', '));
-        }
+      // 朝向。直接写 rotation.y，走路中会被 tick 每帧覆盖，所以走路时要额外转。
+      if (config.yaw != null && isFinite(Number(config.yaw))) {
+        live.turn.rotation.y = Number(config.yaw);
+        live.place.updateWorldMatrix(true, true);
       }
     },
 
     dispose: function () {
       stopLoop();
-      if (!live) return;
-      // 只摘下来。geometry / material 绝对不能碰 ——
-      // 骨骼模型共享它们，dispose 掉整个模型就废了（下次 mount 会一片空白）。
-      if (live.place.parent) live.place.parent.remove(live.place);
+      if (live && live.place.parent) live.place.parent.remove(live.place);
       live = null;
-      // 走动状态一并清零
       walking = false;
       walkTarget = null;
+      walkEnv = 0;
+      walkFade = false;
       moving = false;
+      // cached 故意留着：模型是全局缓存的，dispose 掉 geometry/material
+      // 会连别的房间一起废掉（骨骼模型是多实例共享同一份资源的）。
+      currentPose = 'stand';
     },
 
-    // 场景里最外层那个节点（place）。房间层要用它把人物从射线检测里排除掉 ——
-    // 不排除的话，从上往下打射线会先打中她自己。
+    // 调试信息，给 character-3d-editor.js 的面板用
     root: function () { return cached ? cached.place : null; },
-
-    tick: tick,      // 自带循环用的，不是接口要求的方法
-
+    tick: tick,
     debug: function () {
-      syncHolder();                 // 报出来的数一定是当前真实状态
+      if (!cached) return null;
+      var box = new THREE.Box3().setFromObject(cached.model);
+      var size = new THREE.Vector3();
+      box.getSize(size);
       return {
-        loaded: !!cached,
-        mounted: !!live,
-        pose: currentPose,
-        bones: cached ? Object.keys(cached.bones).length : 0,
-        // 真实高度从场景里算，不要用常量拼 —— setConfig 能改实例缩放，拼出来的会对不上。
-        roomHeight: live ? (live.holder.scale.y * cached.bbox.size.y) : null,
-        // 当前实例实际用的比例（含 setConfig 的覆盖），反推出来最准
-        roomScale: live && cached ? +((live.holder.scale.y * cached.bbox.size.y) /
-          (BASE_H * sizeScale())).toFixed(3) : null,
-        room: activeRoomId,
-        walking: walking,
-        moving: moving,
-        hasTarget: !!walkTarget,
-        pos: live ? [live.place.position.x, live.place.position.y, live.place.position.z] : null,
-        // 脚底的实际世界高度。地板顶面在 y=0，所以这个数应该 ≈ 0；
-        // 大于 0 就是悬空（曾经因为 setPosition 覆盖了归一化偏移而一直悬着）。
-        footY: live ? worldBox().min.y : null,
-        pos: live ? [live.place.position.x, live.place.position.y, live.place.position.z] : null,
-        pose: currentPose,
-        yawDeg: live ? Math.round(live.turn.rotation.y * 180 / Math.PI) : 0
+        bones: Object.keys(cached.bones).length,
+        hasClip: !!wk_state.clip,
+        height: size.y,
+        roomScale: roomScale(),
+        mySize: mySize(),
+        pos: live ? [live.place.position.x, live.place.position.y, live.place.position.z] : null
       };
     },
 
-    // 查骨骼：bind 指向 + 当前世界位置。摆姿势对不对，看这个最直接，
-    // 比对着截图猜省事（左右哪根在 +x 侧也一眼能看出来）。
-    debugBones: function (names) {
-      var m = cached;
-      if (!m) return null;
-      var THREE = m.THREE;
-      if (!_dbgA) _dbgA = new THREE.Vector3();
-      var list = names && names.length ? names : Object.keys(m.bones);
-      var out = [];
-      list.forEach(function (n) {
-        var b = m.bones[n];
-        if (!b) { out.push({ name: n, missing: true }); return; }
-        var p = b.getWorldPosition(new THREE.Vector3());
-        var d = m.bindDir[n];
-        var far = null, farD = 0;
-        var self = p.clone();
-        for (var i = 0; i < b.children.length; i++) {
-          b.children[i].getWorldPosition(_dbgA);
-          var dd = _dbgA.distanceTo(self);
-          if (dd > farD) { farD = dd; far = b.children[i]; }
-        }
-        var now = null;
-        if (far && farD > 1e-5) {
-          far.getWorldPosition(_dbgA);
-          now = _dbgA.sub(self).normalize();
-        }
-        out.push({
-          name: n,
-          parent: b.parent ? (b.parent.name || b.parent.type) : null,
-          bindDir: [round(d.x), round(d.y), round(d.z)],
-          nowDir: now ? [round(now.x), round(now.y), round(now.z)] : null,
-          pos: [round(p.x), round(p.y), round(p.z)]
-        });
+    // 把全部骨骼名和朝向 dump 出来，调姿势规则时对着看
+    debugBones: function () {
+      if (!cached) return [];
+      return Object.keys(cached.bones).map(function (n) {
+        return { name: n, dir: cached.bindDir[n] ? cached.bindDir[n].toArray() : null };
       });
-      return out;
     },
 
-    // 查骨骼树有没有重名。重名会让 bindWorldQ[name] 和 bones[name] 对不上
-    // （后者取第一个、前者被最后一个覆盖），姿势就会整体歪掉 ——
-    // 表现是"手臂朝奇怪的方向"，很难从截图看出来。
     debugTree: function () {
-      var m = cached;
-      if (!m) return null;
-      var all = 0;
-      var names = {};
-      var dup = [];
-      m.model.traverse(function (o) {
-        if (!o.isBone) return;
-        all++;
-        if (names[o.name]) dup.push(o.name);
-        names[o.name] = (names[o.name] || 0) + 1;
-      });
-      var orphan = [];
-      Object.keys(m.bones).forEach(function (n) {
-        var b = m.bones[n];
-        if (!b.parent) orphan.push(n);
-      });
-      return {
-        traversedBones: all,
-        uniqueNames: Object.keys(names).length,
-        indexed: Object.keys(m.bones).length,
-        duplicates: dup,
-        parentless: orphan
-      };
+      if (!live) return null;
+      var lines = [];
+      (function walk(node, depth) {
+        if (depth > 3) return;
+        lines.push('  '.repeat(depth) + node.name + ' [' + node.type + ']');
+        for (var i = 0; i < node.children.length; i++) walk(node.children[i], depth + 1);
+      })(live.place, 0);
+      return lines.join('\n');
     }
   };
 
-  var _dbgA = null;
-  function round(x) { return Math.round(x * 1000) / 1000; }
-
-  /** 人物在世界坐标下的包围盒。脚底高度看 min.y。 */
-  function worldBox() {
-    if (!cached) return null;
-    cached.place.updateWorldMatrix(true, true);
-    return new cached.THREE.Box3().setFromObject(cached.model);
-  }
-
-  /**
-   * 往下打一条射线，找 (x, z) 上真正的"可站表面"高度。
-   *
-   * 为什么不能直接用 y=0：卧室的地板顶面在 y=0，但地毯是浮在地板上的
-   * （ExtrudeGeometry 0.07 + bevel 0.02，position.y=0.07 → 顶面 ≈0.11）。
-   * 写死 y=0 的话站在地毯上会陷进去 0.11。
-   *
-   * 只认朝上的面（法线 y > 0.5），否则会打到墙、家具的竖直面。
-   * 人物自己要被排除掉，不然射线先打中自己的脑袋。
-   */
-  var _ray = null;
-  function surfaceY(THREE, scene, x, z) {
-    if (!_ray) _ray = new THREE.Raycaster();
-    _ray.set(new THREE.Vector3(x, 30, z), new THREE.Vector3(0, -1, 0));
-    var hits;
-    try {
-      hits = _ray.intersectObjects(scene.children, true);
-    } catch (e) {
-      return 0;
-    }
-    // 收集所有朝上的面，按从高到低（intersectObjects 已经按距离排序）
-    var up = [];
-    for (var i = 0; i < hits.length; i++) {
-      var ob = hits[i].object;
-      if (cached && cached.place && isDescendant(ob, cached.place)) continue;
-      if (!hits[i].face) continue;
-      var n = hits[i].face.normal.clone().transformDirection(ob.matrixWorld);
-      if (n.y > 0.5) up.push(hits[i].point.y);
-    }
-    if (!up.length) return 0;
-    // 贴着最低那一层挑，而不是无脑取第一个朝上的面。
-    // 第一个可能是台面 / 柜顶 / 窗台，人站上去就悬空了。
-    // 允许高出最低面一点 —— 地毯、蒲团有厚度，应该站上去。
-    var lo = Math.min.apply(null, up);
-    for (var j = 0; j < up.length; j++) {
-      if (up[j] <= lo + 0.5) return up[j];
-    }
-    return lo;
-  }
-
-  function isDescendant(obj, root) {
-    var p = obj;
-    while (p) {
-      if (p === root) return true;
-      p = p.parent;
-    }
-    return false;
-  }
-
-  /** 检查从 (p.x,p.y+0.5,p.z) 朝 (vx,vz) 走一段 probe 是否被立面挡住。 */
-  function directCheck(THREE, p, vx, vz, probe) {
-    var scene = live.scene;
-    if (!scene) return true;
-    var ray = new THREE.Raycaster(
-      new THREE.Vector3(p.x, p.y + 0.5, p.z),
-      new THREE.Vector3(vx, 0, vz)
-    );
-    ray.far = probe;
-    var hits = ray.intersectObjects(scene.children, true);
-    for (var i = 0; i < hits.length; i++) {
-      var h = hits[i];
-      if (isDescendant(h.object, cached.place)) continue;
-      if (!h.face) continue;
-      var n = h.face.normal.clone().transformDirection(h.object.matrixWorld);
-      // 朝上朝下的面都不算挡（地板、天花板）
-      if (Math.abs(n.y) > 0.5) continue;
-      return false;
-    }
-    return true;
-  }
-
-  // ---- 注册到插槽 ----
+  // 房间层通过 character-3d.js 的插槽调我们。character-3d.js 可能还没加载完
+  // （index.html 里的脚本都是 defer），所以这里轮询等它出现，
+  // 而不是假设 global.HomeCharacter3D 一定在。
   if (global.HomeCharacter3D) {
     global.HomeCharacter3D.register(adapter);
   } else {
-    // character-3d.js 还没加载 —— 轮询等它，别让顺序问题变成"人不见了"
+    // character-3d.js 还没到，轮询等它 —— 别报"找不到 HomeCharacter3D"
     var tries = 0;
     var timer = setInterval(function () {
       tries++;
@@ -1237,7 +1378,7 @@
         global.HomeCharacter3D.register(adapter);
       } else if (tries > 100) {
         clearInterval(timer);
-        console.warn('[home/character-3d-girl] 等不到 character-3d.js，人物没接上');
+        console.warn('[home/character-3d-girl] 等不到 character-3d.js，人物不会显示');
       }
     }, 60);
   }

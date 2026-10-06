@@ -7,8 +7,9 @@
  *
  * 房间分两类，渲染路径不同：
  *   2D 房间  客厅 / 浴室 / 庭院  —— 家具是 DOM + emoji，见 rooms-2d.js / art.js
- *   3D 房间  卧室 / 小厨房      —— 家具是 WebGL 网格，场景代码暂时还在 apps.js
- *                                （第 2 步会把小厨房也搬过来）
+ *   3D 房间  卧室 / 小厨房      —— 家具是 WebGL 网格，场景代码在
+ *                                rooms-3d/{bedroom,kitchen}-scene.js，
+ *                                几何体在同目录的 -geometry.js，HUD 在 -hud.js
  *
  * 人物严格分离，两边互不越界：
  *   2D 房间 -> character-2d.js 的 .home-person DOM 覆盖层（由 renderHome 生成）
@@ -192,10 +193,10 @@ function mountCharacter3D(roomId, scene) {
 window.mountHomeCharacter3D = mountCharacter3D;
 
 function switchRoom(id) {
-  destroyBedroom3D();
-  if (window.closeHomeAvatarEditor) window.closeHomeAvatarEditor();
-  if (window.closeHomeCharEdit3D) window.closeHomeCharEdit3D();
-  if (typeof suspendKitchen3D === 'function') suspendKitchen3D();
+  // 这里不做收摊 —— 下面必然调 renderHome()，收摊统一在它开头做（L49-53）。
+  // 原来这四行和 renderHome 开头逐字重复，每次切房间收摊做两遍。
+  // 它们都不读 activeRoom，所以在换房间之前做和之后做没有区别，删掉即可。
+  // 以后加新的收摊步骤，只加到 renderHome 一个地方。
   var h = state.home;
   if (!h || !h.rooms || !h.rooms[id]) return;
   h.activeRoom = id;

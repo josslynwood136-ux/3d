@@ -38,6 +38,10 @@
       '  <i class="bd-sep"></i>',
       '  <button id="bd-glow" class="bd-btn">✨ <span>氛围</span></button>',
       '  <i class="bd-sep"></i>',
+      '  <button id="bd-win" class="bd-btn">🪟 <span>窗</span></button>',
+      '  <i class="bd-sep"></i>',
+      '  <button id="bd-curtain" class="bd-btn bd-btn-on">🪞 <span>帘</span></button>',
+      '  <i class="bd-sep"></i>',
       '  <button id="bd-reset" class="bd-btn" title="恢复默认视角">🔄 <span>视角</span></button>',
       '</footer>',
 
