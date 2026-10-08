@@ -98,7 +98,7 @@
 
   // 文件名里不要留空格和括号 —— 原来叫 "free_stylized_cartoon_girl_rigged_character (1).glb"，
   // URL 编码之后很容易在某一环被截断，已改名成 character-girl.glb。
-  var MODEL_URL = 'character-girl.glb';
+  var MODEL_URL = 'character-girl.glb?v=20261007j';
 
   // 真实人类身高（米）。这一项是有实际含义的，mySize 也按米换算。
   var BASE_H = 1.66;
@@ -149,7 +149,7 @@
   // 坐标是从对应房间的布局里量出来的，改家具布局时要跟着改：
   //
   // 卧室（SIZE 11，墙在 ±5.5）
-  //   床 x -4.25…-0.85 / z -5.15…-0.05，地毯中心 (1.0, 1.4)
+  //   床 x -4.25…-0.85 / z -4.55…0.55（床往前挪了 0.6 给窗帘），地毯中心 (1.0, 1.4)
   //   → (1.6, 1.8) 在地毯上、扶手椅旁，周围没家具
   //
   // 小厨房（ROOM_W 7.5，墙在 ±3.75）
@@ -1121,6 +1121,115 @@
   }
 
   // ------------------------------------------------------------
+  // 双马尾发型（静态 GLB，挂到头骨 CC_Base_Head_038 上）
+  // ------------------------------------------------------------
+  //
+  // 资源：js/home/braids.glb
+  //   由 IP_SCBE_F_HAIR_2.fbx 离线转换而来（烘焙蒙皮顶点 → 静态网格，删骨骼），
+  //   并且**顶点在转换时就烘进了头骨 CC_Base_Head_038 的局部空间**：
+  //   两个资产头骨解剖位置同源、朝向一致（脸+Z 上+Y），转换脚本按"头骨对头骨、k=1"
+  //   算好 inv(headWorldBind) 焊进顶点（脚本：hairtest/convert_fit.mjs）。
+  //   运行时只需 head.add(glb) + 单位变换 —— 不依赖加载时机/当前姿态/包围盒，
+  //   加载时模型在任何姿态下挂上去都是对的。
+  var braidsGroup = null;    // 加载好的 GLB 根（挂在头骨下）
+  var braidsLoading = false;
+  var BRAIDS_URL = 'js/home/braids.glb?v=20261007h';
+  var BRAIDS_MARK = 'hair-braids';   // 挂上去的 group 打个标记，方便在任意副本里找到它
+  var hairRoots = [];                // 注册进来要同步发型的额外模型根（编辑器预览的 clone）
+  var braidsDefaultColor = null;     // GLB 自带的默认发色（"原色"时恢复它）
+
+  // 在模型根里找头骨
+  function findHeadBone(root) {
+    var found = null;
+    root.traverse(function (o) { if (o.isBone && o.name === 'CC_Base_Head_038') found = o; });
+    return found;
+  }
+
+  // 在模型根里拿双马尾 group；没有就克隆一份挂进这个根的头骨。
+  // 预览是 SkeletonUtils.clone 的独立副本（mesh 独立、只共享材质），
+  // 房间那份挂了双马尾不代表预览那份也有 —— 待注册的副本各挂各的。
+  // clone(true) 共享 geometry/material，所以改色两边依然同步。
+  function braidsIn(root) {
+    var head = findHeadBone(root);
+    if (!head) return null;
+    for (var i = 0; i < head.children.length; i++) {
+      if (head.children[i].name === BRAIDS_MARK) return head.children[i];
+    }
+    if (!braidsGroup || !cached || root === cached.model) return null;
+    var cp = braidsGroup.clone(true);
+    head.add(cp);
+    return cp;
+  }
+
+  // 把当前发型套到一个模型根：原发按材质名 lambert10 显隐，双马尾反着来
+  function applyHairStyleTo(root) {
+    if (!root) return;
+    var showOrig = (adapter._hairStyle !== 'ponytail');
+    root.traverse(function (o) {
+      if (!o.isMesh || !o.material) return;
+      var mats = Array.isArray(o.material) ? o.material : [o.material];
+      for (var i = 0; i < mats.length; i++) {
+        if (mats[i].name === 'lambert10') o.visible = showOrig;
+      }
+    });
+    var tw = braidsIn(root);
+    if (tw) tw.visible = !showOrig;
+  }
+
+  // 房间模型 + 所有注册的预览副本一起套用
+  function applyHairStyleEverywhere() {
+    applyHairStyleTo(cached && cached.model);
+    for (var i = 0; i < hairRoots.length; i++) applyHairStyleTo(hairRoots[i]);
+  }
+
+  function loadTwoBraids(THREE) {
+    if (braidsGroup || braidsLoading || !cached || !global.GLTFLoader) return;
+    braidsLoading = true;
+    console.info('[home/character-3d-girl] 双马尾 GLB 开始加载…');
+    new global.GLTFLoader().load(BRAIDS_URL, function (gltf) {
+      braidsLoading = false;
+      try {
+        var head = cached.bones['CC_Base_Head_038'];
+        if (!head) throw new Error('找不到头骨 CC_Base_Head_038');
+
+        // 顶点已是头骨局部空间（离线烘好），直接挂上、单位变换
+        var fbx = gltf.scene;
+        fbx.position.set(0, 0, 0);
+        fbx.quaternion.set(0, 0, 0, 1);
+        fbx.scale.set(1, 1, 1);
+        head.add(fbx);
+        head.updateWorldMatrix(true, true);
+
+        // 打标记 → 交给统一的套用逻辑（房间 + 所有注册的预览副本一起换）
+        fbx.name = BRAIDS_MARK;
+        braidsGroup = fbx;
+        // 记下 GLB 自带发色，发色选"原色"时恢复它（lambert10 的原色是白=贴图，双马尾没贴图）
+        fbx.traverse(function (o) {
+          if (!braidsDefaultColor && o.isMesh && o.material && o.material.color) {
+            braidsDefaultColor = o.material.color.clone();
+          }
+        });
+        applyHairStyleEverywhere();
+        // 之前选过发色的话，补涂到刚加载的双马尾上
+        if (adapter._hairColor) adapter.setHairColor(adapter._hairColor);
+
+        var wb = new THREE.Box3().setFromObject(fbx);
+        var ws = new THREE.Vector3(); wb.getSize(ws);
+        console.info('[home/character-3d-girl] 双马尾加载完成（顶点已烘进头骨空间）：世界尺寸=(' +
+          ws.x.toFixed(3) + ',' + ws.y.toFixed(3) + ',' + ws.z.toFixed(3) +
+          ') 顶部Y=' + wb.max.y.toFixed(3) + ' 底部Y=' + wb.min.y.toFixed(3) +
+          ' 位置=(' + fbx.position.x.toFixed(2) + ',' + fbx.position.y.toFixed(2) + ',' + fbx.position.z.toFixed(2) + ')' +
+          ' 可见=' + fbx.visible);
+      } catch (e) {
+        console.warn('[home/character-3d-girl] 双马尾挂载失败', e);
+      }
+    }, undefined, function (e) {
+      braidsLoading = false;
+      console.warn('[home/character-3d-girl] 双马尾 GLB 下载失败', e);
+    });
+  }
+
+  // ------------------------------------------------------------
   // 适配层
   // ------------------------------------------------------------
 
@@ -1198,6 +1307,14 @@
         say('ready', '');
 
         startLoop();
+
+        // 恢复持久化的外观（刷新页面 / 重进房间后颜色和发型还在）。
+        // 放在 mount 成功之后：此时 cached 和 live 都就绪。
+        try {
+          var sh = (global.state && global.state.home) || {};
+          if (sh.hairColor) adapter.setHairColor(sh.hairColor);
+          if (sh.hairStyle === 'ponytail') adapter.setHairStyle('ponytail');
+        } catch (e) { console.warn('[home/character-3d-girl] 恢复外观失败', e); }
 
         console.info('[home/character-3d-girl] 已挂载到 ' + (roomId || '?') +
           '：' + Math.round(m.bbox.size.y) + ' 模型单位 -> ' +
@@ -1325,6 +1442,96 @@
       currentPose = 'stand';
     },
 
+    /* ---- 发色 ----
+     * 头发 mesh = "model:Mesh_lambert10_0"（材质 lambert10），
+     * 实测包围盒 Y 115~170（头顶最高点 169.8）、Z 拖到 -25.3（长发向后拖），
+     * 是模型里唯一的头发。材质带贴图，换色 = color × 贴图（tint），
+     * 所以原色是 0xffffff（白色 = 显示贴图本来的颜色）。
+     * 预览那份 clone 是 SkeletonUtils.clone，material 引用共享 ——
+     * 在这里改颜色，房间和预览会同时变，正好。 */
+    _hairColor: '',
+    setHairColor: function (hex) {
+      if (!cached) return;
+      hex = hex || '';
+      this._hairColor = hex;
+      var target = new (cached.THREE.Color)(hex || '#ffffff');
+      var found = false;
+      cached.model.traverse(function (o) {
+        if (!o.isMesh || !o.material) return;
+        var mats = Array.isArray(o.material) ? o.material : [o.material];
+        for (var i = 0; i < mats.length; i++) {
+          if (mats[i].name === 'lambert10') {
+            mats[i].color.copy(target);
+            found = true;
+          }
+        }
+      });
+      // 双马尾 GLB 的材质（名不是 lambert10，单独处理）。
+      // 预览副本是 clone(true)，和 braidsGroup 共享同一份 material —— 改这里两边同步。
+      // 发色为空（"原色"）时恢复 GLB 自带的默认色：lambert10 的原色是白=显示贴图，
+      // 双马尾没贴图，套白色会变成白发，所以要分开处理。
+      if (braidsGroup) {
+        braidsGroup.traverse(function (o) {
+          if (!o.isMesh || !o.material) return;
+          var mats = Array.isArray(o.material) ? o.material : [o.material];
+          for (var i = 0; i < mats.length; i++) {
+            if (mats[i].color) {
+              mats[i].color.copy(hex ? target : (braidsDefaultColor || target));
+              found = true;
+            }
+          }
+        });
+      }
+      if (!found) {
+        console.warn('[home/character-3d-girl] setHairColor: 没找到头发材质 lambert10');
+      }
+    },
+    currentHairColor: function () { return this._hairColor || ''; },
+
+    /* ---- 发型 ----
+     * GLB 里只有一个发型（长发 mesh）。双马尾是独立资源
+     * js/home/braids.glb（由 IP_SCBE_F_HAIR_2.fbx 离线转换而来），
+     * 由 loadTwoBraids() 异步加载后挂到头骨上。
+     *   'orig'    → 显示 GLB 长发，隐藏双马尾
+     *   'ponytail'→ 隐藏 GLB 长发，显示双马尾（加载没完成就先只隐藏原发）
+     *
+     * 注意：找头发 mesh 要按 **材质名 lambert10**，不能按 mesh 名 ——
+     * GLTFLoader 加载后 mesh.name 会变成 Object_NN（运行时重命名），
+     * glTF JSON 里的 "model:Mesh_lambert10_0" 在运行时对不上。 */
+    _hairStyle: 'orig',
+    setHairStyle: function (style) {
+      if (!cached || !live) return;
+      style = (style === 'ponytail') ? 'ponytail' : 'orig';
+      this._hairStyle = style;
+      console.info('[home/character-3d-girl] setHairStyle(' + style + ')，braidsGroup=' +
+        (braidsGroup ? '已加载' : '未加载'));
+      // 房间模型 + 注册的预览副本一起换 ——
+      // 预览是独立 clone，只改房间那份的话面板里看不到任何变化
+      applyHairStyleEverywhere();
+      // 没加载过就触发加载，完成后 applyHairStyleEverywhere 会自动套上
+      if (style === 'ponytail' && !braidsGroup) loadTwoBraids(cached.THREE);
+    },
+    currentHairStyle: function () { return this._hairStyle || 'orig'; },
+
+    // 给 character-3d-editor.js 的 buildPreview() 用：
+    // 它需要 g.model() 拿到模型对象来 clone 一份做预览
+    model: function () { return cached ? cached.model : null; },
+    // 预览（SkeletonUtils clone）是独立副本：mesh 的显隐不会自动同步过来，
+    // 双马尾也只挂在房间那份的头骨上。编辑器把 clone 注册进来，
+    // 换发型 / 双马尾加载完成时会一起套用，预览才和房间一致。
+    registerHairRoot: function (root) {
+      if (!root || hairRoots.indexOf(root) >= 0) return;
+      hairRoots.push(root);
+      applyHairStyleTo(root);   // 注册那一刻就套上当前发型，顺序反了也不怕
+    },
+    unregisterHairRoot: function (root) {
+      var i = hairRoots.indexOf(root);
+      if (i >= 0) hairRoots.splice(i, 1);
+    },
+    // buildPreview 用它把预览人物缩放 + 归中（脚底贴 y=0、x/z 居中）。
+    // 返回的是 **归一化前的原始包围盒**（scale=1 时量的），和预览自算的 k 配套。
+    bbox: function () { return cached ? cached.bbox : null; },
+
     // 调试信息，给 character-3d-editor.js 的面板用
     root: function () { return cached ? cached.place : null; },
     tick: tick,
@@ -1367,7 +1574,7 @@
   // （index.html 里的脚本都是 defer），所以这里轮询等它出现，
   // 而不是假设 global.HomeCharacter3D 一定在。
   if (global.HomeCharacter3D) {
-    global.HomeCharacter3D.register(adapter);
+    global.HomeCharacter3D.register('girl', adapter);
   } else {
     // character-3d.js 还没到，轮询等它 —— 别报"找不到 HomeCharacter3D"
     var tries = 0;
@@ -1375,7 +1582,7 @@
       tries++;
       if (global.HomeCharacter3D) {
         clearInterval(timer);
-        global.HomeCharacter3D.register(adapter);
+        global.HomeCharacter3D.register('girl', adapter);
       } else if (tries > 100) {
         clearInterval(timer);
         console.warn('[home/character-3d-girl] 等不到 character-3d.js，人物不会显示');

@@ -94,8 +94,8 @@
 
       '  <div class="c3d-label">发型</div>' +
       '  <div class="c3d-style-row" id="c3dStyles">' +
-      '    <button class="c3d-style' + (curStyle === 'orig' ? ' on' : '') + '" data-style="orig" onclick="homeChar3DStyle(this)">默认</button>' +
-      '    <button class="c3d-style' + (curStyle === 'alt' ? ' on' : '') + '" data-style="alt" onclick="homeChar3DStyle(this)">短发</button>' +
+      '    <button class="c3d-style' + (curStyle !== 'ponytail' ? ' on' : '') + '" data-style="orig" onclick="homeChar3DStyle(this)">长发</button>' +
+      '    <button class="c3d-style' + (curStyle === 'ponytail' ? ' on' : '') + '" data-style="ponytail" onclick="homeChar3DStyle(this)">双马尾</button>' +
       '  </div>' +
 
       '  <div class="c3d-label">发色</div>' +
@@ -144,12 +144,26 @@
 
   function buildPreview() {
     var g = girl();
-    if (!g || typeof g.model !== 'function' || !g.model()) return false;
+    if (!g || typeof g.model !== 'function' || !g.model()) {
+      console.warn('[home/character-3d-editor] buildPreview 跳过：girl adapter 没有可用的 model()',
+        g ? 'model 类型=' + typeof g.model : 'girl 未注册');
+      return false;
+    }
     var THREE = window.THREE;
-    if (!THREE || !window.SkeletonUtils) return false;
+    if (!THREE || !window.SkeletonUtils) {
+      console.warn('[home/character-3d-editor] buildPreview 跳过：THREE=' + !!THREE +
+        ' SkeletonUtils=' + !!window.SkeletonUtils);
+      return false;
+    }
 
     var srcModel = g.model();
+    // 万一重建过预览，先把旧 clone 的注册摘掉，别对脱离场景的副本白费功夫
+    if (preview.clone && typeof g.unregisterHairRoot === 'function') g.unregisterHairRoot(preview.clone);
     var clone = window.SkeletonUtils.clone(srcModel);
+    preview.clone = clone;
+    // 注册进 girl adapter：预览是独立 clone，发型显隐/双马尾不会自动同步，
+    // 不注册的话点了"双马尾"只有房间那份换、面板预览纹丝不动
+    if (typeof g.registerHairRoot === 'function') g.registerHairRoot(clone);
 
     // 两份模型的骨骼按遍历顺序一一对应
     var bonesSrc = [], bonesDst = [];
@@ -205,6 +219,8 @@
     preview.bonesSrc = bonesSrc;
     preview.bonesDst = bonesDst;
     preview.built = true;
+    // 暴露到 window：调试预览用（控制台里 _c3dPreview.scene 可以直接查）
+    global._c3dPreview = preview;
 
     // 可以拖动转视角
     if (window.OrbitControls) {
@@ -286,9 +302,13 @@
   }
 
   function heightText(d) {
-    if (!d || d.roomHeight == null) return '身高未知';
-    return '身高 ' + d.roomHeight.toFixed(2) + ' 房间单位 约 ' +
-      (d.heightM != null ? d.heightM.toFixed(2) + ' m' : '');
+    if (!d) return '身高未知';
+    // debug() 给的是 height（房间单位）和 mySize；老字段是 roomHeight / heightM。
+    // 两套都认，否则面板一直显示"身高未知"。
+    var h = d.roomHeight != null ? d.roomHeight : d.height;
+    if (h == null) return '身高未知';
+    var m = d.heightM != null ? d.heightM : (d.mySize != null ? (1.66 * d.mySize / 11) : null);
+    return '身高 ' + h.toFixed(2) + ' 房间单位' + (m != null ? ' 约 ' + m.toFixed(2) + ' m' : '');
   }
 
   // 发色板：value 是 hex，空字符串 = 不改（跟随贴图原色）
