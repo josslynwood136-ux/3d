@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>Ghost × Walk.smd 走步测试</title>
+  <style>
+    html, body { margin: 0; height: 100%; background: #16161d; overflow: hidden; }
+    canvas { display: block; }
+    #hud {
+      position: fixed; left: 8px; top: 8px; z-index: 10;
+      color: #7fff7f; background: rgba(0,0,0,.72);
+      font: 12px/1.5 Consolas, monospace; padding: 8px 10px;
+      border-radius: 6px; max-width: 60vw; white-space: pre-wrap;
+      pointer-events: none;
+    }
+  </style>
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+  <div id="hud">loading…</div>
+  <div id="views" style="position:fixed;right:8px;top:8px;z-index:10;display:flex;gap:6px;">
+    <button data-v="front">正面</button>
+    <button data-v="side">侧面</button>
+    <button data-v="back">背面</button>
+    <button data-v="free">3/4</button>
+  </div>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { FBXLoader } from 'three/addons/loaders/FBXLoader.js';
+
+    window.THREE = THREE;
+    window.GLTFLoader = GLTFLoader;
+    window.FBXLoader = FBXLoader;
+    THREE.ColorManagement.enabled = false;
+
+    // ---- 控制台镜像到 HUD ----
+    const hud = document.getElementById('hud');
+    const lines = [];
+    const origin = { info: console.info, warn: console.warn };
+    function push(tag, args) {
+      const s = args.map(a => (a && a.stack) ? a.stack : String(a)).join(' ');
+      if (/character-3d-ghost|smd-loader|SMD|walk/i.test(s)) {
+        lines.push('[' + tag + '] ' + s);
+        if (lines.length > 8) lines.shift();
+        hud.textContent = lines.join('\n');
+      }
+    }
+    console.info = (...a) => { origin.info(...a); push('I', a); };
+    console.warn = (...a) => { origin.warn(...a); push('W', a); };
+
+    // ---- 场景 ----
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(0x16161d);
+    const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.01, 200);
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setSize(innerWidth, innerHeight);
+    renderer.setPixelRatio(Math.min(2, devicePixelRatio));
+    renderer.shadowMap.enabled = true;
+    document.body.appendChild(renderer.domElement);
+
+    scene.add(new THREE.AmbientLight(0xffffff, 0.9));
+    const sun = new THREE.DirectionalLight(0xffffff, 1.4);
+    sun.position.set(6, 10, 5);
+    sun.castShadow = true;
+    scene.add(sun);
+    const grid = new THREE.GridHelper(30, 30, 0x3a3a4a, 0x26262f);
+    scene.add(grid);
+
+    async function waitAdapter() {
+      for (let i = 0; i < 100; i++) {
+        if (window.HomeCharacter3DGhost) return window.HomeCharacter3DGhost;
+        await new Promise(r => setTimeout(r, 60));
+      }
+      throw new Error('HomeCharacter3DGhost 等不到');
+    }
+
+    async function main() {
+      hud.textContent = '加载 Ghost 适配器…';
+      const adapter = await waitAdapter();
+      if (!adapter) throw new Error('HomeCharacter3DGhost 没加载');
+      const ok = await adapter.mount({ THREE, scene, roomId: 'bedroom' });
+      if (!ok) throw new Error('mount 失败');
+      window.__T = { THREE, scene, adapter };
+
+      // Ghost 身高约 1.4 世界单位，站立 (1.6, 0, 1.8)
+      // ?view=front 正面 / side 侧面 / back 背面 / free 3/4，右上按钮也可切
+      // turn 默认 -0.42（约 -24°），正对脸机位要沿脸朝向摆，不能只摆 +Z
+      const VIEWS = {
+        front: [[-1.34, 2.0, 8.37], [1.6, 2.0, 1.8]],
+        side: [[1.6 + 7.2, 2.2, 1.8], [1.6, 2.0, 1.8]],
+        back: [[1.6, 2.2, 1.8 - 7.2], [1.6, 2.0, 1.8]],
+        free: [[1.6 + 3.2, 2.6, 1.8 + 6.4], [1.6, 2.1, 1.8]]
+      };
+      function setView(name) {
+        const v = VIEWS[name] || VIEWS.free;
+        camera.position.set(v[0][0], v[0][1], v[0][2]);
+        camera.lookAt(v[1][0], v[1][1], v[1][2]);
+      }
+      const qv = new URLSearchParams(location.search).get('view');
+      setView(qv);
+      document.getElementById('views').addEventListener('click', (e) => {
+        if (e.target.dataset.v) setView(e.target.dataset.v);
+      });
+
+      adapter.setPose('walk', { moving: true });
+      hud.textContent = 'walk 已触发（clip 加载中会先程序摆腿，加载完自动切换）';
+
+      renderer.setAnimationLoop(() => renderer.render(scene, camera));
+    }
+
+    main().catch(e => {
+      hud.textContent = '✗ ' + (e && e.message ? e.message : e);
+      console.error(e);
+    });
+  </script>
+
+  <script defer src="js/home/smd-loader.js?v=20261007h"></script>
+  <script defer src="js/home/character-3d-ghost.js?v=20261008b"></script>
+</body>
+</html>
