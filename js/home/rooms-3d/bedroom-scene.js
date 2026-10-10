@@ -34,6 +34,7 @@
   var resizeWatcher = null;
   var loop = null;
   var notifier = null;
+  var composer = null;   // 后期链句柄，销毁时要 dispose（模块级，理由同上）
   var initAttempts = 0;
   var pointerHandlers = null;
   var destroyed = false;
@@ -41,24 +42,19 @@
   var geoArgs = null;
 
   // -----------------------------------------------------------------
-  // 背景色
+  // 背景色（后期管线补偿值）
   // -----------------------------------------------------------------
-  // scene.background 是普通 Color，three 在 clear 时会把它转到"输出色彩
-  // 空间"。我们用 sRGB 输出，所以这里必须先把目标 sRGB 色值换成线性值 ——
-  // 否则屏幕上会比预期的亮一截。
+  // 卧室开了后期链（EffectComposer + OutputPass，见 init 里的 setupPost），
+  // 背景 clear 值会和全场一起过 ACES(曝光 0.62) 再做 sRGB 编码。
+  // 而原管线里 clear 是直接写像素的（ColorManagement 关着，getRGB 的
+  // 色彩空间转换是空操作），显示值 = 存的值 = f(hex)（f 为 sRGB EOTF）。
   //
-  // 不用 THREE.Color.convertSRGBToLinear()：ColorManagement.enabled =
-  // false 时 three 的 convert() 直接 return，那个方法是空操作。
-  // 下面这个 sRGB EOTF 就是 three 内部那一套。
-  function makeBg(hex) {
-    var c = new THREE.Color(hex);
-    function f(u) {
-      return u < 0.04045 ? u * 0.0773993808 : Math.pow(u * 0.9478672986 + 0.0521327014, 2.4);
-    }
-    return { r: f(c.r), g: f(c.g), b: f(c.b) };
-  }
-  var BG_DAY = null;      // 暖米色，原文件那圈渐变的中间色
-  var BG_NIGHT = null;    // 夜间暗紫
+  // 要让加后期前后背景逐位一致，就得存逆像：
+  //   X = ACES⁻¹( f(f(hex)) ) / (0.62/0.6)
+  // 正向渲染时 LinearToSRGB(ACES(X)) = f(hex) = 旧显示值（已数值验证）。
+  // 想换背景色就按这个公式重算，或直接让我改。
+  var BG_DAY = null;      // 0xe2cdc3 的补偿值
+  var BG_NIGHT = null;    // 0x3a3145 的补偿值
 
   function showError(message) {
     var hint = document.querySelector('.bedroom3d-hint');
@@ -103,8 +99,8 @@
     var canvas = host.querySelector('canvas.bd-canvas');
     if (!canvas) return;
 
-    BG_DAY = makeBg(0xe2cdc3);
-    BG_NIGHT = makeBg(0x3a3145);
+    BG_DAY = { r: 0.758397, g: 0.417307, b: 0.323168 };   // 0xe2cdc3 的逆 ACES 补偿值
+    BG_NIGHT = { r: 0.019862, g: 0.015753, b: 0.025986 }; // 0x3a3145 的逆 ACES 补偿值
     scene = new THREE.Scene();
     // 原文件没有雾：加雾会把 11 米宽的房间洗白，所以去掉。
     scene.background = new THREE.Color(BG_DAY.r, BG_DAY.g, BG_DAY.b);
@@ -202,7 +198,8 @@
     controls.target.copy(defaultLookAt);
     // 正交相机靠 zoom 缩放，不是 min/maxDistance
     controls.minZoom = 0.65;
-    controls.maxZoom = 2.2;
+    controls.maxZoom = 3.6;      // 放大上限（原 2.2，用户要求能放更大）
+    controls.zoomSpeed = 1.4;    // 滚轮每档放大量（默认 1）
     // 角度锁死在一个"设计好的等距窗口"里 —— 和厨房同一组数值。
     // 不锁的话能绕到地台底下看穿单面墙，或者转到墙背面对着空气，
     // 那正是"看着别扭"的来源。
@@ -223,6 +220,78 @@
     // 记一份落地灯的白天强度，关灯时才知道要恢复成多少
     if (geoArgs.lampLight) geoArgs.lampDay = geoArgs.lampLight.intensity;
     else geoArgs.lampDay = 0;
+
+    // =================================================================
+    // 后期处理：GTAO 接触阴影 + 轻 bloom + 暗角
+    // =================================================================
+    // 目标是"家具落得住、灯光有氛围"，不改风格不动颜色：
+    //   RenderPass（线性 HDR —— three 只在直绘画布时做 ACES，进 RT 后
+    //     材质不再 tone map，所以末端必须补一个 OutputPass）
+    //   → GTAOPass（AO 乘在亮部上，接触处自然压暗）
+    //   → UnrealBloom（极弱，只让亮部有点光晕）
+    //   → Vignette（四周轻微压暗，视线聚焦）
+    //   → OutputPass（ACES 曝光 0.62 + sRGB —— 和原直绘管线逐位对齐；
+    //      背景色为此存了逆像补偿，见文件头 BG_DAY）
+    // 加载失败（CDN 拉不到模块等）就静默回退直绘，房间照常能用。
+    var ppBusy = false;
+    var baseRender = renderer.render.bind(renderer);
+    renderer.render = function (sc, cam) {
+      if (composer && !ppBusy && sc === scene && cam === camera) {
+        ppBusy = true;
+        try { composer.render(); } finally { ppBusy = false; }
+      } else {
+        baseRender(sc, cam);
+      }
+    };
+    var baseSetSize = renderer.setSize.bind(renderer);
+    renderer.setSize = function (w, h, updateStyle) {
+      if (composer) composer.setSize(w, h);
+      return baseSetSize(w, h, updateStyle);
+    };
+
+    var ppBuf = renderer.getDrawingBufferSize(new THREE.Vector2());
+    Promise.all([
+      import('three/addons/postprocessing/EffectComposer.js'),
+      import('three/addons/postprocessing/RenderPass.js'),
+      import('three/addons/postprocessing/GTAOPass.js'),
+      import('three/addons/postprocessing/UnrealBloomPass.js'),
+      import('three/addons/postprocessing/ShaderPass.js'),
+      import('three/addons/shaders/VignetteShader.js'),
+      import('three/addons/postprocessing/OutputPass.js')
+    ]).then(function (m) {
+      if (destroyed) return;
+      var EC = m[0], RP = m[1], GT = m[2], UB = m[3], SP = m[4], VS = m[5], OP = m[6];
+      var comp = new EC.EffectComposer(renderer);
+      // MSAA：直绘时画布自带 antialias，走 RT 后要给 composer 的缓冲开 4x
+      comp.renderTarget1.samples = 4;
+      comp.renderTarget2.samples = 4;
+      comp.addPass(new RP.RenderPass(scene, camera));
+      var gtao = new GT.GTAOPass(scene, camera, ppBuf.x, ppBuf.y);
+      gtao.output = GT.GTAOPass.OUTPUT.Default;
+      gtao.updateGtaoMaterial({
+        radius: 0.35,           // 世界半径：家具腿、靠垫这些接触尺度
+        distanceExponent: 1.6,
+        thickness: 1.0,
+        scale: 0.9,             // AO 强度，0.9 克制一点不脏
+        samples: 16,
+        distanceFallOff: 1.0,
+        screenSpaceRadius: false
+      });
+      comp.addPass(gtao);
+      var bloom = new UB.UnrealBloomPass(new THREE.Vector2(ppBuf.x, ppBuf.y), 0.20, 0.55, 1.0);
+      comp.addPass(bloom);
+      var vig = new SP.ShaderPass(VS.VignetteShader);
+      vig.uniforms.offset.value = 1.15;
+      vig.uniforms.darkness.value = 0.75;
+      comp.addPass(vig);
+      comp.addPass(new OP.OutputPass());
+      var cssSize = renderer.getSize(new THREE.Vector2());
+      comp.setSize(cssSize.x, cssSize.y);
+      composer = comp;
+    }).catch(function (err) {
+      console.warn('[bedroom] 后期链加载失败，回退直绘:', err);
+      composer = null;
+    });
 
     // -----------------------------------------------------------------
     // HUD 按钮逻辑
@@ -457,8 +526,23 @@
         ['#bd-glow', toggleCozy],
         ['#bd-win', toggleWindow],
         ['#bd-curtain', toggleCurtain],
-        ['#bd-reset', resetView]
+        ['#bd-reset', resetView],
+        ['#bd-char-girl', function () { selectChar('girl'); }],
+        ['#bd-char-ghost', function () { selectChar('ghost'); }]
       ]);
+    }
+    function selectChar(id) {
+      if (global.HomeCharacter3D && global.HomeCharacter3D.selectCharacter) {
+        global.HomeCharacter3D.selectCharacter(id);
+        updateCharButtons();
+      }
+    }
+    function updateCharButtons() {
+      var sel = global.HomeCharacter3D ? global.HomeCharacter3D.getSelectedId() : null;
+      var bg = host.querySelector('#bd-char-girl');
+      var bgh = host.querySelector('#bd-char-ghost');
+      if (bg) bg.classList.toggle('bd-btn-on', sel === 'girl');
+      if (bgh) bgh.classList.toggle('bd-btn-on', sel === 'ghost');
     }
     rebindHudButtons();
 
@@ -514,10 +598,36 @@
     // 同步问的话此刻场景还不存在。
     if (typeof global.mountHomeCharacter3D === 'function') {
       global.mountHomeCharacter3D('bedroom', scene);
+      // 挂载完成后同步角色切换按钮状态
+      setTimeout(updateCharButtons, 100);
+    }
+
+    // ---- 衣柜开合（点衣柜先开关门，再弹动作泡泡）----
+    var wardrobeOpen = false;
+    var wardrobeTweenL = null;
+    var wardrobeTweenR = null;
+    function toggleWardrobe() {
+      var wd = geoArgs.wardrobe;
+      if (!wd || !wd.doorL || !wd.doorR) return;
+      wardrobeOpen = !wardrobeOpen;
+      wd.open = wardrobeOpen;
+      if (wardrobeTweenL) wardrobeTweenL.stop();
+      if (wardrobeTweenR) wardrobeTweenR.stop();
+      // 左门轴在 z0 侧向 +z 伸，开门往 +x 转取正；右门镜像取负。约 106 度。
+      wardrobeTweenL = new TWEEN.Tween(wd.doorL.rotation)
+        .to({ y: wardrobeOpen ? 1.85 : 0 }, 900)
+        .easing(TWEEN.Easing.Cubic.InOut)
+        .start();
+      wardrobeTweenR = new TWEEN.Tween(wd.doorR.rotation)
+        .to({ y: wardrobeOpen ? -1.85 : 0 }, 900)
+        .easing(TWEEN.Easing.Cubic.InOut)
+        .start();
+      showNotification(wardrobeOpen ? '衣柜打开了 👗' : '衣柜合上了');
     }
 
     // ---- 拾取 ----
     function openFurniture(fid, hitPoint) {
+      if (fid === 'fur-wardrobe') toggleWardrobe();
       if (hitPoint && global.HomeCharacter3D) {
         // 卧室是 3D 房间：点地板把 3D 人物移过去。
         // 3D 人物位置由 character-3d.js 自己在场景里处理，
@@ -555,11 +665,20 @@
       if (!intersects.length) return;
       var hit = intersects[0];
 
-      // 人物自己也在 scene.children 里，不排除的话射线会先打中她
-      // （她 3.8 单位高，从相机看过去挡得很准），后面什么都不用判了。
-      if (global.HomeCharacter3DGirl && global.HomeCharacter3DGirl.root) {
-        var charRoot = global.HomeCharacter3DGirl.root();
-        if (charRoot && base.isUnder(hit.object, charRoot)) return;
+      // 点中人物 = 选中该角色（之后点地板只走选中的）
+      if (global.HomeCharacter3D) {
+        var roles = global.HomeCharacter3D.getRoles();
+        for (var ri = 0; ri < roles.length; ri++) {
+          var rid = roles[ri];
+          var rad = global['HomeCharacter3D' + rid.charAt(0).toUpperCase() + rid.slice(1)];
+          if (rad && rad.root) {
+            var charRoot = rad.root();
+            if (charRoot && base.isUnder(hit.object, charRoot)) {
+              global.HomeCharacter3D.selectCharacter(rid);
+              return;
+            }
+          }
+        }
       }
 
       var obj = hit.object;
@@ -572,10 +691,7 @@
       if (fid) {
         openFurniture(fid, hit.point);
       } else if (global.Home3DRoom && global.Home3DRoom.isFloorHit(hit, scene)) {
-        // 点地面：让 3D 人物走过去。
-        // 判定和坐标换算都在 room-view-3d.js 里，厨房用同一套。
-        // 之前卧室自己写了一份 "hit.point.y < 0.3"，厨房压根没这个分支，
-        // 所以在厨房点地面没反应；而且那份判断也认不出地毯（有厚度）。
+        // 点地面：只让选中的角色走过去
         global.Home3DRoom.moveCharacterTo(hit.point);
       }
     };
@@ -604,11 +720,14 @@
     if (initTimer) { clearTimeout(initTimer); initTimer = null; }
     initAttempts = 0;
     // PMREM 的 render target 不在 scene.traverse 覆盖范围内，得单独释放
+    // 穿衣镜 Reflector 的 target 也一样（有 dispose 就调，没有就跳过）
     if (geoArgs && geoArgs.envRenderTarget) {
       geoArgs.envRenderTarget.dispose();
-      geoArgs = null;
     }
-    if (loop) { loop.stop(); loop = null; }
+    if (geoArgs && geoArgs.mirrorReflector && typeof geoArgs.mirrorReflector.dispose === 'function') {
+      try { geoArgs.mirrorReflector.dispose(); } catch (e) {}
+    }
+    if (geoArgs) geoArgs = null;    if (loop) { loop.stop(); loop = null; }
     var cv = document.querySelector('.home-room.bedroom canvas.bd-canvas');
     if (cv && pointerHandlers) {
       cv.removeEventListener('pointerdown', pointerHandlers.onPointerDown);
@@ -620,6 +739,7 @@
     if (resizeWatcher) { resizeWatcher.remove(); resizeWatcher = null; }
     if (notifier) { notifier.dispose(); notifier = null; }
     if (controls) { controls.dispose(); controls = null; }
+    if (composer) { try { composer.dispose(); } catch (e) {} composer = null; }
     if (renderer) { renderer.dispose(); renderer = null; }
     base.disposeSceneObjects(scene);
     scene = null;

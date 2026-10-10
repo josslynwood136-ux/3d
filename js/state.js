@@ -2,7 +2,7 @@
 // state.js - 数据层 + 工具函数
 // ============================================================
 const STORAGE_KEY = 'aiPhoneSoftwareState.v1';
-const wallpaper = 'https://img.facfox.com/imgs/2026/07/21/ca7e52f015267b44.jpg';
+const wallpaper = 'https://img.facfox.com/imgs/2026/09/20/0ce0945661a1a4ec.jpg';
 const emojis = ['❤️','💋','😍','😘','🌹','✨','🔥','😂','🤣','😊','😎','🤔','🙄','😴','😭','😱','😡','🌈','🍎','🍓','🍦','🍹','🎁','🎈','🎀','👍','👎','👌','✌️','👊','👏','🙏'];
 
 const defaultState = {

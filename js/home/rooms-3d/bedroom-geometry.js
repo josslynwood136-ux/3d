@@ -336,7 +336,7 @@
     //      光线斜穿窗洞进屋：地板上出现真正的窗棂光斑（门窗的中梃
     //      投出格子影），床尾和地毯被扫到一块暖光，窗内亮、窗外更亮。
     //
-    // 位置取 (6.2, 9.5, -17)：z 在后墙外，x 落在窗洞范围 (-2.2..3.4) 内偏右。
+    // 位置取 (6.2, 9.5, -17)：z 在后墙外，x 落在窗洞范围 (-4.23..3.4) 内偏右。
     //
     // 光斑落在地板哪，是"窗洞沿光线方向投影"的结果，不由 position 单独决定，
     // 而由 (position - target) 这个**方向**决定：方向越偏（横向斜率越大），
@@ -446,6 +446,26 @@
     const matQuilt     = M(0xffffff, { map: quiltTex, roughness: 0.95, envMapIntensity: 0.2 });
     const matKnit      = M(0xffffff, { map: knitTex, roughness: 1.0, envMapIntensity: 0.15 });
     const matCurtain   = M(0xfaf4ea, { roughness: 1.0, side: THREE.DoubleSide, envMapIntensity: 0.2 });
+    // 窗帘专用：纯白底 + 浅灰竖向软条纹（两倍于褶数），
+    // 褶峰亮、褶谷灰，合上时有布的光影，收起压缩后条纹跟着变密、自然成束。
+    const curtainTex = makeTex(512, 64, (g, w, h) => {
+      g.fillStyle = '#faf5e9'; g.fillRect(0, 0, w, h);
+      const stripes = 14;
+      for (let i = 0; i < stripes; i++) {
+        const x = (i + 0.5) * w / stripes;
+        const grd = g.createLinearGradient(x - w / stripes / 2, 0, x + w / stripes / 2, 0);
+        grd.addColorStop(0, 'rgba(190,172,148,0)');
+        grd.addColorStop(0.5, 'rgba(190,172,148,0.08)');
+        grd.addColorStop(1, 'rgba(190,172,148,0)');
+        g.fillStyle = grd;
+        g.fillRect(x - w / stripes / 2, 0, w / stripes, h);
+      }
+    });
+    const matCurtainPanel = new THREE.MeshPhysicalMaterial({ color: 0xffffff, map: curtainTex,
+      roughness: 0.85, side: THREE.DoubleSide, envMapIntensity: 0.3,
+      transparent: true, opacity: 0.94,
+      emissive: new THREE.Color(0xfff8ec), emissiveIntensity: 0.06,
+      sheen: 1.0, sheenRoughness: 0.5, sheenColor: new THREE.Color(0xfff6e6) });
     const matWeave     = M(0xffffff, { map: weaveTex, roughness: 0.95 });
     const matRug       = M(0xffffff, { map: rugTex, roughness: 1.0, envMapIntensity: 0.1 });
     const matLilac     = M(0x8f7fa6, { roughness: 0.95 });
@@ -653,12 +673,32 @@
 
       function buildHalf(sign) {
         const g = new THREE.PlaneGeometry(1, height, SEG_X, SEG_Y);
-        const mesh = new THREE.Mesh(g, matCurtain);
+        const mesh = new THREE.Mesh(g, matCurtainPanel);
         mesh.castShadow = true; mesh.receiveShadow = true;
         group.add(mesh);
         return { mesh: mesh, sign: sign, base: g.attributes.position.array.slice() };
       }
       const halves = [buildHalf(-1), buildHalf(1)];
+      // 挂环：每半幅 7 个，金色圆环套在杆上 + 布带连到帘顶。
+      // 环的 x 跟着帘顶走（shape 里按同一公式更新），收拢时环也收拢，
+      // 不会出现帘动环不动的穿帮。
+      const RINGS_PER_HALF = 7;
+      const ROD_Y = 5.62, ROD_Z = -SIZE / 2 + 0.42;
+      const tapeMat = M(0xf8f1e3, { roughness: 1.0 });
+      var rings = [];
+      halves.forEach(function (h) {
+        for (let k = 0; k < RINGS_PER_HALF; k++) {
+          const u = (k + 0.5) / RINGS_PER_HALF;
+          const ring = new THREE.Mesh(new THREE.TorusGeometry(0.055, 0.013, 10, 22), matGold);
+          ring.rotation.y = Math.PI / 2;
+          ring.castShadow = true;
+          roomGroup.add(ring);
+          const tape = new THREE.Mesh(new THREE.BoxGeometry(0.035, 0.13, 0.02), tapeMat);
+          tape.castShadow = true;
+          roomGroup.add(tape);
+          rings.push({ half: h.sign, u: u, ring: ring, tape: tape });
+        }
+      });
 
       function shape(t, sway, lift, drag) {
         function clamp01(x) { return x > 1 ? 1 : (x < 0 ? 0 : x); }
@@ -676,8 +716,11 @@
 
         // 内缘退到哪：合上时在 x=0（两幅在窗心相接），抽开时退到
         // halfW - gathered，于是整幅塌成一条 gathered 宽的束子、贴在墙边。
-        var ampBaseL = 0.11 + tL * 0.10 + motion * 0.03;
-        var ampBaseR = 0.11 + tR * 0.10 + motion * 0.03;
+        // 之前振幅随 t 加大（0.11→0.21）再叠 0.14 鼓包，束子 z 向 0.35、
+        // 比束宽还厚，看着像坨。改成收起压薄：合上 0.13 保褶深，抽开 0.08；
+        // 鼓包 0.14→0.05，只留束形不鼓坨。
+        var ampBaseL = 0.13 - tL * 0.05 + motion * 0.02;
+        var ampBaseR = 0.13 - tR * 0.05 + motion * 0.02;
         const freq = folds;               // 折数不随 t 变：x 线性压缩本身就会
                                           // 把褶皱挤密，再改 freq 会叠加成毛刺
 
@@ -703,18 +746,27 @@
             // 横向：外缘钉死在 ±halfW，内缘随 t 往墙边收
             const x = h.sign * ((1 - u) * halfW + u * inner);
 
-            // 纵向：顶边贴杆（baseY - h/2），下摆随褶皱微微起伏成荷叶边，
-            // 行程中 lift 把下摆轻轻提起（v^2 加权），落定后归零。
-            const y = baseY - height / 2 + Math.sin(u * Math.PI * freq) * 0.05 * v * v + lift * v * v;
+            // 纵向：顶边贴杆，下摆只留 0.04 的柔波（之前 0.09 太碎，和 flare
+            // 相位还打架，下摆看着乱）。行程中 lift 把下摆轻轻提起，落定归零。
+            const y = baseY - height / 2 + Math.sin(u * Math.PI * freq + 0.7) * 0.04 * v * v * v + lift * v * v;
 
-            // 顶边被杆上的挂钩拽平，往下才放开褶子。
-            // 0.07 这个起始值让顶边永远保持扁平，否则布会戳穿前面的帘杆。
-            const profile = Math.max(0, Math.min(1, (v - 0.07) / 0.13));
-            const wave = Math.sin(u * Math.PI * 2 * freq * 0.5) * ampB * profile;
-            // 抽开后内缘（朝窗心那一侧）鼓出来一道，束子才有厚度；
+            // 顶部释放用 smoothstep（0→0.35 渐放）：之前 v 0.07→0.2 硬开关，
+            // 褶到那一圈突然长出来，中段横着一道勒痕。现在渐放就没有那道线。
+            var pv = v / 0.35; if (pv > 1) pv = 1; if (pv < 0) pv = 0;
+            const profile = pv * pv * (3 - 2 * pv);
+            // 主褶 + 一道很弱的次褶（0.12）：纯单频显僵，次褶太强显脏，取中间。
+            const wave = (Math.sin(u * Math.PI * freq) + Math.sin(u * Math.PI * freq * 2.33 + 1.3) * 0.12) * ampB * profile;
+            // 抽开后内缘（朝窗心那一侧）微微鼓起，束子有形即可；
             // 行程中段再额外鼓一点，布被拽过去时的挤压感。
-            const bulge = (u * u * tt * 0.14 + motion * 0.05 * u * u) * profile;
-            const zz = wave + bulge + sHay * v * v;
+            const bulge = (u * u * tt * 0.05 + motion * 0.03 * u * u) * profile;
+            // 飘逸感：中段就开始往房间里兜（v^2，早啟才有 S 形），
+            // 褶口只在下摆张开（v^3），且和下摆波同相（0.7），边动一致不乱。
+            const belly = 0.08 * v * v;
+            const flare = Math.sin(u * Math.PI * freq + 0.7) * 0.05 * v * v * v;
+            // 收起压扁：抽开后（tt→1）z 向整体 *0.4 贴墙，侧面看不再鼓；
+            // 合上时（tt=0）drape 完整保留。摆动 sway 不压，动画还要它。
+            const flat = 1 - tt * 0.6;
+            const zz = (wave + bulge + belly + flare) * flat + sHay * v * v;
 
             arr[i * 3] = x;
             arr[i * 3 + 1] = y;
@@ -722,6 +774,15 @@
           }
           pos.needsUpdate = true;
           h.mesh.geometry.computeVertexNormals();
+        });
+        // 挂环跟帘顶：环 x 按顶边（v=0，ttEff=tt）同一公式算，布带竖在环下连帘顶。
+        // 帘顶世界 z 就是组 z（顶边 zz=0），杆在前 0.08，带子夹中间。
+        rings.forEach(function (r) {
+          var rtt = (r.half < 0 ? tL : tR);
+          var rInner = rtt * (halfW - gathered);
+          var rx = cx + r.half * ((1 - r.u) * halfW + r.u * rInner);
+          r.ring.position.set(rx, ROD_Y, ROD_Z);
+          r.tape.position.set(rx, topY + 0.05, z + 0.04);
         });
       }
 
@@ -758,7 +819,10 @@
 
     // 后墙：留出整面门窗洞 (阳光可穿过)
     const wz = -SIZE / 2 - T / 2;              // -5.7
-    const winX0 = -2.2, winX1 = 3.4, winTop = 5.35;
+    // 窗洞左边一直开到悬浮柜正面（x -4.23）：整张床（-4.25..-0.85）都在窗前，
+    // 这已经是极限 —— 柜子 x -5.33..-4.23、y 4.26..4.98 顶着后墙，
+    // winX0 再往左移 1 厘米都会在柜子上开洞。
+    const winX0 = -4.23, winX1 = 3.4, winTop = 5.35;
     function backSeg(x0, x1, y0, y1) {
       const m = new THREE.Mesh(new THREE.BoxGeometry(x1 - x0, y1 - y0, T),
         [matWall, matWall, matWall, matWall, matWall, matFrame]);
@@ -788,13 +852,11 @@
     // 现在把固定格条全去掉：窗洞里唯一的分隔是窗扇自己的边框，
     // 开窗时两扇滑到两侧叠在外框边上，中间露出一个完整通透的大洞，
     // 一眼就知道窗被推开了。格子的感觉交给窗扇自己的中竖梃和横档。
-    box(0.2, winTop, 0.58, matWood, winX0, winTop / 2, wz + 0.04);
-    box(0.2, winTop, 0.58, matWood, winX1, winTop / 2, wz + 0.04);
-    box(winX1 - winX0 + 0.36, 0.22, 0.58, matWood, (winX0 + winX1) / 2, winTop, wz + 0.04);
+    // 窗洞外框只留底：两侧边框、内侧压条都删了，洞口裸边，
+    // 靠两扇窗扇自己的框填满（扇宽已放到洞口半宽，无缝对接）。
+    // 顶梁恢复一条（洞口顶沿需要它收边，不然墙底边裸露闪）。
+    box(winX1 - winX0 + 0.36, 0.12, 0.58, matWood, (winX0 + winX1) / 2, winTop, wz + 0.04);
     box(winX1 - winX0 + 0.36, 0.18, 0.54, matWood, (winX0 + winX1) / 2, 0.09, wz + 0.04);
-    // 内侧压条：比外框窄一圈、稍微靠室内，勾出窗洞的层次
-    box(0.09, winTop - 0.2, 0.12, matWoodTop, winX0 + 0.16, winTop / 2, wz + 0.2);
-    box(0.09, winTop - 0.2, 0.12, matWoodTop, winX1 - 0.16, winTop / 2, wz + 0.2);
     // 窗台板：往外挑一点，坐在窗洞底部
     box(winX1 - winX0 + 0.5, 0.1, 0.72, matWoodTop, (winX0 + winX1) / 2, 0.2, wz + 0.16);
 
@@ -807,17 +869,16 @@
     // 中间那道竖线永远不动，开不开窗长得一样，就是这个毛病。
     function buildSlidingSash(width, height, x, zOff) {
       const sg = new THREE.Group();
-      const F = 0.14;                 // 边框厚度，加粗才有存在感
-      const FD = 0.13;                // 边框进深
+      const F = 0.08;                 // 边框收窄（之前 0.14 太宽）
+      const FD = 0.1;                 // 边框进深同步收薄
       // 上下左右四条边框
       box(F, height, FD, matWoodTop, -width / 2 + F / 2, -height / 2, 0, sg);
       box(F, height, FD, matWoodTop,  width / 2 - F / 2, -height / 2, 0, sg);
       box(width, F, FD, matWoodTop, 0, -F / 2, 0, sg);
       box(width, F, FD, matWoodTop, 0, -height + F / 2, 0, sg);
-      // 中竖梃：把每扇分成上下两格，古典推拉窗的样子
-      box(0.09, height - F * 2, 0.1, matWoodTop, 0, -height / 2, 0, sg);
-      // 中横档：四格，比只一根竖梃更有家具感
-      box(width - F * 2, 0.09, 0.1, matWoodTop, 0, -height * 0.5, 0, sg);
+      // 中竖梃 + 中横档同步收窄
+      box(0.06, height - F * 2, 0.08, matWoodTop, 0, -height / 2, 0, sg);
+      box(width - F * 2, 0.06, 0.08, matWoodTop, 0, -height * 0.5, 0, sg);
       // 玻璃（上下两块，中间让格条挡着）
       const gw = width - F * 2, gh = (height - F * 2) / 2 - 0.045;
       [[-F - gh / 2, 0], [-height + F + gh / 2, 0]].forEach(function (gl) {
@@ -826,20 +887,20 @@
         sg.add(gm);
       });
       // 边框内侧一条深色线：布出"框有厚度"的层次
-      box(width - F * 2 + 0.02, 0.03, 0.05, matWoodDark, 0, -F + 0.015, 0.04, sg);
-      // 把手：金色竖长条 + 两个固定座，形状要能一眼认出是拉手
-      const hx = -width / 2 + F + 0.2;
-      box(0.055, 0.42, 0.055, matGold, hx, -height * 0.42, 0.1, sg);
-      box(0.07, 0.06, 0.11, matGold, hx, -height * 0.42 + 0.19, 0.06, sg);
-      box(0.07, 0.06, 0.11, matGold, hx, -height * 0.42 - 0.19, 0.06, sg);
-      sg.position.set(x, winTop - 0.1, wz + 0.07 + zOff);
+      box(width - F * 2 + 0.02, 0.025, 0.04, matWoodDark, 0, -F + 0.012, 0.03, sg);
+      // 把手已删（推拉扇不装竖把手，保持玻璃干净）
+      // 扇顶埋进顶梁里（5.29~5.41），不共面不闪
+      sg.position.set(x, winTop, wz + 0.07 + zOff);
       roomGroup.add(sg);
       return sg;
     }
-    const sashW = (winX1 - winX0) / 2 - 0.04;
-    const sashH = winTop - 0.22;
-    const sashL = buildSlidingSash(sashW, sashH, winX0 + sashW / 2 + 0.02, 0);
-    const sashR = buildSlidingSash(sashW, sashH, winX1 - sashW / 2 - 0.02, 0.07);
+    // 扇宽 = 洞口半宽：两扇并排正好填满洞口，无缝对接外露墙边
+    // 扇顶埋进顶梁（5.29~5.41），扇底坐到窗台上沿 0.26（之前底埋进窗台板
+    // 里穿插，就是底下闪的来源）。上下都不共面、不穿插。
+    const sashW = (winX1 - winX0) / 2;
+    const sashH = winTop - 0.26;
+    const sashL = buildSlidingSash(sashW, sashH, winX0 + sashW / 2, 0);
+    const sashR = buildSlidingSash(sashW, sashH, winX1 - sashW / 2, 0.07);
     // 关着时两扇并排正好盖住窗洞；打开时各滑到两头，中间让出通路。
     // 扇宽要暴露给场景层 —— 滑到位要往回收 sashW/2，不给宽度就不知道收多少。
     api.sashL = sashL;
@@ -850,17 +911,126 @@
     api.winX1 = winX1;
 
     // 窗外的柔光花园 (只贴在门窗洞后方，不超出房子轮廓)
-    const garden = new THREE.Mesh(new THREE.PlaneGeometry(7.4, 6.8),
+    // 窗洞加宽到 7.63（-4.23..3.4），花园板同步加宽并挪到新洞心
+    const garden = new THREE.Mesh(new THREE.PlaneGeometry(9.0, 6.8),
       new THREE.MeshBasicMaterial({ map: gardenTex }));
-    garden.position.set(0.6, 3.4, -6.7);
+    garden.position.set(-0.415, 3.4, -6.7);
     garden.userData.noOutline = true;   // 窗外背景不能描，否则窗洞一圈黑框
     roomGroup.add(garden);
 
-    // === 窗帘：中间对开落地帘 ===
-    const rod = cyl(0.055, 0.055, 7.6, matWoodDark, 0.6, 5.62, -SIZE / 2 + 0.42, 12);
+    // === 窗帘盒 —— 简化版：一整面浅木挂板 + 一道顶收口 ===
+    // 用户反馈三条，逐条对策：
+    //   1. 色调偏黄 → 底色换中性灰米 d7cab7，贴奶油墙调，不发黄
+    //   2. 太复杂   → 砍掉黄铜嵌条、双叠级、踢出线条，只留挂板+顶收口两件
+    //   3. 中间有缝 → 程序贴图改成横向周期无缝（波纹频率取整数、节疤留边距），
+    //      RepeatWrapping 平铺的接缝处纹理连续，看不出 4 段拼接
+    // 木纹 map+bumpMap、清漆 clearcoat、圆角倒边保留 —— 细节靠材质，不靠堆造型。
+
+    // ---- 程序木纹：中性浅木，横纹沿盒长走，横向 100% 周期无缝 ----
+    const corniceTex = makeTex(2048, 512, (g, w, h) => {
+      g.fillStyle = '#d7cab7'; g.fillRect(0, 0, w, h);              // 灰米中性底
+      for (let i = 0; i < 460; i++) {
+        const amp = 2 + Math.random() * 10;
+        const y0 = amp + Math.random() * (h - 2 * amp);             // 不压画布边界
+        const dark = Math.random() < 0.55;
+        g.strokeStyle = dark
+          ? 'rgba(126,104,80,' + (0.04 + Math.random() * 0.10).toFixed(3) + ')'
+          : 'rgba(248,243,234,' + (0.05 + Math.random() * 0.12).toFixed(3) + ')';
+        g.lineWidth = 0.6 + Math.random() * 2.4;
+        // 整数频率 → sin 周期正好整除画布宽，左右平铺接缝处波形连续
+        const ph = Math.random() * 6.28, f = 1 + Math.floor(Math.random() * 3);
+        g.beginPath();
+        for (let x = 0; x <= w; x += 16) {
+          const y = y0 + Math.sin(ph + x / w * 6.28 * f) * amp;
+          if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
+        }
+        g.stroke();
+      }
+      // 节疤：整块留在画布内（左右留 140、上下留 130），不跨边界断开
+      for (let k = 0; k < 3; k++) {
+        const kx = 140 + Math.random() * (w - 280), ky = 130 + Math.random() * (h - 260);
+        for (let r = 5; r < 46; r += 5 + Math.random() * 5) {
+          g.strokeStyle = 'rgba(128,106,82,' + Math.max(0.02, 0.12 - r * 0.002).toFixed(3) + ')';
+          g.lineWidth = 1.4;
+          g.beginPath(); g.ellipse(kx, ky, r * 2.6, r, 0, 0, 6.283); g.stroke();
+        }
+      }
+      // 导管细孔：不出右边界，跨缝不出血
+      for (let i = 0; i < 2800; i++) {
+        const pw = 1 + Math.random() * 8;
+        g.fillStyle = 'rgba(112,94,72,' + (0.04 + Math.random() * 0.10).toFixed(3) + ')';
+        g.fillRect(Math.random() * (w - pw), Math.random() * h, pw, 1);
+      }
+    }, 4, 1);
+
+    // ---- 同源凹凸图：灰度，同样的无缝规则 ----
+    const corniceBump = makeTex(1024, 256, (g, w, h) => {
+      g.fillStyle = '#808080'; g.fillRect(0, 0, w, h);               // 中灰 = 平面
+      for (let i = 0; i < 380; i++) {
+        const amp = 1.5 + Math.random() * 8;
+        const y0 = amp + Math.random() * (h - 2 * amp);
+        g.strokeStyle = 'rgba(0,0,0,' + (0.10 + Math.random() * 0.25).toFixed(3) + ')';
+        g.lineWidth = 0.6 + Math.random() * 2.0;
+        const ph = Math.random() * 6.28, f = 1 + Math.floor(Math.random() * 3);
+        g.beginPath();
+        for (let x = 0; x <= w; x += 16) {
+          const y = y0 + Math.sin(ph + x / w * 6.28 * f) * amp;
+          if (x === 0) g.moveTo(x, y); else g.lineTo(x, y);
+        }
+        g.stroke();
+      }
+      for (let i = 0; i < 2200; i++) {
+        const pw = 1 + Math.random() * 7;
+        g.fillStyle = 'rgba(0,0,0,' + (0.12 + Math.random() * 0.25).toFixed(3) + ')';
+        g.fillRect(Math.random() * (w - pw), Math.random() * h, pw, 1);
+      }
+    }, 4, 1);
+    corniceBump.colorSpace = THREE.NoColorSpace;                      // 凹凸图不吃颜色空间
+
+    // ---- 材质：面层带清漆罩面，顶收口/侧板同纹压哑 ----
+    const corniceFace = new THREE.MeshPhysicalMaterial({
+      color: 0xffffff, map: corniceTex,
+      bumpMap: corniceBump, bumpScale: 0.5,
+      roughness: 0.45, envMapIntensity: 0.5,
+      clearcoat: 0.45, clearcoatRoughness: 0.22
+    });
+    const corniceSide = new THREE.MeshStandardMaterial({
+      color: 0xe6ded2, map: corniceTex,                               // 极浅压一档，不发黑
+      bumpMap: corniceBump, bumpScale: 0.4,
+      roughness: 0.75, envMapIntensity: 0.3
+    });
+    const rodMat = M(0x8b6d3a, { roughness: 0.6, metalness: 0.5 });   // 藏杆（不可见）
+
+    const CW = 7.63, RET = 0.35, FW = CW + RET * 2;                   // 8.33 全长
+    const cx = (winX0 + winX1) / 2;                                   // -0.415 窗心
+    const backZ = -SIZE / 2 - 0.06;                                   // -5.56 埋进墙，背面不露缝
+    // 造型只有两件（winTop 5.35 之上全是实心墙，板底 5.46 不碰窗洞）：
+    //   挂板 5.46..5.86：一整面通长，圆角倒边，遮帘顶 5.52 和挂环
+    //   顶收口 5.86..5.96：后退 0.16 到墙，全盒唯一一道阴影线
+    //   两端回墙侧板藏在挂板背后（正面 z -5.12 = 挂板背面），不露缝不穿插
+    // 挂板面 z -4.96，帘布顶 z -5.16 留 0.20 净空，不穿模。
+
+    // 挂板（主体，一整块，没有嵌条没有叠级）
+    rbox(FW, 0.40, 0.16, 0.025, corniceFace, cx, 5.66, -5.04);        // y 5.46..5.86  z -5.12..-4.96
+    // 顶收口（后退一步，同时从上面挡住盒内）
+    box(FW, 0.10, 0.44, corniceSide, cx, 5.91, -5.34);                // y 5.86..5.96  z -5.56..-5.12
+    // 两端回墙侧板
+    box(RET, 0.40, 0.44, corniceSide, winX0 - RET / 2, 5.66, -5.34);  // y 5.46..5.86  z -5.56..-5.12
+    box(RET, 0.40, 0.44, corniceSide, winX1 + RET / 2, 5.66, -5.34);
+
+    // ---- 内藏挂帘杆：帘环 y5.62 / z-5.08，被挂板整个挡住 ----
+    const rod = cyl(0.018, 0.018, FW, rodMat, cx, 5.62, -SIZE / 2 + 0.42, 12);
     rod.rotation.z = Math.PI / 2;
-    sph(0.1, matWoodDark, -3.3, 5.62, -SIZE / 2 + 0.42);
-    sph(0.1, matWoodDark, 4.5, 5.62, -SIZE / 2 + 0.42);
+
+    // ---- 隐藏 LED 灯带：贴挂板底沿，向下洗亮帘布 ----
+    const ledStrip = new THREE.Mesh(
+      new THREE.BoxGeometry(FW, 0.008, 0.008),
+      new THREE.MeshBasicMaterial({ color: 0xffd4a0, transparent: true, opacity: 0 })
+    );
+    ledStrip.position.set(cx, 5.456, -5.00);
+    ledStrip.userData.isLedStrip = true;
+    roomGroup.add(ledStrip);
+    api.curtainLed = ledStrip;
 
     // ---- 中间抽开的落地帘 ----
     // 一整幅帘子，从中间往两侧抽开，收拢时褶皱在两侧挤成一束。
@@ -868,11 +1038,12 @@
     // 布的总长度不变，只是折得更密。这样收拢处才有"抽成一束"的质感，
     // 而不是把帘子拉宽（那样褶皱会被压平）。
     var curtain = makeDrawCurtain(
-      6.2,                          // 窗洞 5.6 + 两侧各压 0.3 墙：合上盖严，开了束子刚好落在窗外
+      7.93,                         // 右缘压右墙 0.3；左缘正好落在 -4.23（悬浮柜正面）——
+                                    // 再往左压墙就穿进柜子里，柜子在 x -5.33..-4.23 是实心的
       5.42,                       // 帘高：顶边 5.52 贴杆，下摆 0.10 拖到地面上方
-      12,                         // 闭合时的褶皱数
-      0.32,                       // 完全抽开时每侧留下的束宽：收到窗外，不挡光
-      0.6,                        // 水平中心 = 杆中心，和窗洞中心同为 0.6
+      7,                          // 褶皱数：12 太碎显脏，7 道大褶干净
+      0.45,                       // 束宽：0.32 太窄、布无处去只能往 z 鼓成坨，放宽到 0.45 薄而有形
+      -0.265,                     // 水平中心：左缘 -4.23 贴柜面、右缘 3.7 压右墙 0.3
       5.52,                       // 顶边贴在杆下沿（杆心 5.62、半径 0.055）
       -SIZE / 2 + 0.34
     );
@@ -892,9 +1063,11 @@
     api.sashR = sashR;
     api.sheer = sheer;
 
-    // 悬挂绿植：挪到窗左外的墙上，别挂窗心 —— 帘合上时正好盖住它，开合还会扫到叶子
-    cyl(0.015, 0.015, 1.3, matDark, -2.85, 6.0, -SIZE / 2 + 0.5, 6);
-    trailingPlant(-2.85, 5.3, -SIZE / 2 + 0.5, 5, 1.9);
+    // 悬挂绿植：挂到窗外去。窗加宽后帘布盖满整个洞口，挂屋里开合必扫叶子；
+    // 挂屋外帘子在里、它在外，永远碰不到，从窗里看还多了层景深。
+    // z -6.25 卡在窗扇（-5.56）和花园贴图（-6.7）之间，前后都不越界。
+    cyl(0.015, 0.015, 0.9, matDark, -3.6, 5.1, -6.25, 6);
+    trailingPlant(-3.6, 4.6, -6.25, 5, 1.9);
 
     /* ================================================================
        3. 左墙：衣柜 + 悬空搁板 + 装饰画
@@ -911,40 +1084,136 @@
       const depth = 1.1, width = 2.6, height = 4.9;
       const PLINTH = 0.16;                     // 底座高
       const DOOR_Y = PLINTH + height / 2;       // 门板中心高度
+      const FID = 'fur-wardrobe';
+      function tag(m) { m.userData.fid = FID; return m; }
       // 底座：内缩 + 踢脚线，做出"落地"的阴影缝
-      rbox(depth - 0.16, PLINTH, width - 0.16, 0.03, matWoodDark, cx, PLINTH / 2, cz);
-      // 柜体
-      rbox(depth, height, width, 0.06, matWood, cx, DOOR_Y, cz);
+      tag(rbox(depth - 0.16, PLINTH, width - 0.16, 0.03, matWoodDark, cx, PLINTH / 2, cz));
+      // ---- 柜体改为空壳（原来是一整块实心 rbox，门打不开、里面是黑的）----
+      // 正面 x=-4.23 齐平，背面贴左墙。侧板 / 背板 / 顶底板围出空腔，
+      // 上层挂衣、下层叠放，门用铰链组才能转开。
+      const xF = cx + depth / 2, xB = cx - depth / 2;
+      const z0 = cz - width / 2, z1 = cz + width / 2;
+      const T = 0.08; // 板厚
+      // 背板（贴墙）
+      tag(box(0.06, height, width, matWoodDark, xB + 0.03, DOOR_Y, cz));
+      // 内衬背板（压深两档，浅衣挂上去才有对比；之前用 matWoodTop 全糊）
+      tag(box(0.02, height - 0.2, width - 0.2, M(0x8a6848, { roughness: 0.85 }), xB + 0.07, DOOR_Y, cz));
+      // 左右侧板
+      tag(box(depth, height, T, matWood, cx, DOOR_Y, z0 + T / 2));
+      tag(box(depth, height, T, matWood, cx, DOOR_Y, z1 - T / 2));
+      // 顶板 / 底板（内腔的上下沿）
+      tag(box(depth - 0.06, T, width - 0.14, matWoodDark, cx, PLINTH + height - T / 2, cz));
+      tag(box(depth - 0.06, T, width - 0.14, matWoodDark, cx, PLINTH + T / 2, cz));
       // 顶部：一块直直的顶板。原来做了两层叠级压线，太花，改成平板。
-      rbox(depth + 0.1, 0.14, width + 0.1, 0.04, matWoodTop, cx, PLINTH + height + 0.07, cz);
-      // 两扇门：门板 + 内凹面板 + 细边框 + 金色长把手
-      [-0.65, 0.65].forEach(o => {
-        const doorW = width / 2 - 0.16;
-        // 门板
-        box(0.05, height - 0.3, doorW, matWoodTop, cx + depth / 2 + 0.025, DOOR_Y, cz + o);
-        // 内凹面板（比门板小一圈，四周留缝）
-        box(0.02, height - 1.05, doorW - 0.34, matWood, cx + depth / 2 + 0.06, DOOR_Y, cz + o);
-        // 面板细边框：四条细木条，做出"框"的感觉
-        const fr = 0.05, fy = height - 1.05, fw = doorW - 0.34;
-        const fx = cx + depth / 2 + 0.075, fz = cz + o;
-        box(0.015, fy, fr, matWoodTop, fx, DOOR_Y, fz - fw / 2 + fr / 2);
-        box(0.015, fy, fr, matWoodTop, fx, DOOR_Y, fz + fw / 2 - fr / 2);
-        box(0.015, fr, fw - fr * 2, matWoodTop, fx, DOOR_Y + fy / 2 - fr / 2, fz);
-        box(0.015, fr, fw - fr * 2, matWoodTop, fx, DOOR_Y - fy / 2 + fr / 2, fz);
-        // 金色长把手（竖的，靠门缝那一侧）
-        const handle = new THREE.Mesh(
-          new THREE.CylinderGeometry(0.03, 0.03, 1.1, 10), matGold);
-        handle.position.set(cx + depth / 2 + 0.1, DOOR_Y,
-          cz + o + (o < 0 ? doorW - 0.14 : -doorW + 0.14));
-        handle.castShadow = true;
-        roomGroup.add(handle);
+      tag(rbox(depth + 0.1, 0.14, width + 0.1, 0.04, matWoodTop, cx, PLINTH + height + 0.07, cz));
+      // 上层隔板（挂衣区和被褥区分开，加深才托得住上面的白被卷）
+      const shelfY = PLINTH + height - 1.0;
+      tag(box(depth - 0.12, 0.06, width - 0.2, matWoodDark, cx - 0.02, shelfY, cz));
+      // 下层中竖板：分成左右两格，左边挂长衣、右边叠放
+      const midZ = cz + 0.25;
+      tag(box(depth - 0.14, shelfY - PLINTH - 0.1, 0.06, M(0x8a6848, { roughness: 0.85 }), cx - 0.02, (shelfY + PLINTH) / 2, midZ));
+      // 右格两块层板（放叠好的衣服 / 收纳盒）
+      [0.95, 1.75].forEach(function (dy) {
+        tag(box(depth - 0.16, 0.05, (z1 - midZ) - 0.2, M(0x8a6848, { roughness: 0.85 }), cx - 0.02, PLINTH + dy, (midZ + z1) / 2));
       });
-      // 柜顶：收纳箱 + 盆栽 + 书堆
-      const topY = PLINTH + height + 0.24;
-      box(0.78, 0.5, 0.7, matCard, cx + 0.05, topY + 0.25, cz - 0.85);
-      box(0.74, 0.05, 0.66, M(0xcfae80), cx + 0.05, topY + 0.51, cz - 0.85);
-      pottedPlant(cx - 0.05, topY, cz + 0.95, 0.6, matSage);
-      bookStack(cx + 0.05, topY, cz + 0.2, 3, -0.25);
+      // ---- 挂衣杆（金属细杆 + 两端托座，之前没有杆）----
+      const rodY = shelfY - 0.32;
+      const rodLen = (midZ - z0) - 0.3;
+      const rodZc = (z0 + midZ) / 2;
+      const rod = new THREE.Mesh(new THREE.CylinderGeometry(0.025, 0.025, rodLen, 20), matMetal);
+      rod.rotation.x = Math.PI / 2;
+      rod.position.set(cx, rodY, rodZc);
+      rod.castShadow = true;
+      roomGroup.add(tag(rod));
+      // 托座：杆两端各一个小圆片钉在侧板/中板上
+      [rodZc - rodLen / 2, rodZc + rodLen / 2].forEach(function (zz) {
+        const cup = new THREE.Mesh(new THREE.CylinderGeometry(0.045, 0.045, 0.03, 16), matMetal);
+        cup.rotation.x = Math.PI / 2;
+        cup.position.set(cx, rodY, zz);
+        roomGroup.add(tag(cup));
+      });
+      // ---- 挂着的衣服（衣架钩 + 肩 + 衣身，低多边形但有形）----
+      // 之前是粉蜡色五件套（e8a0a0 那组），曝光一顶全剩白，换深饱和色才分得开
+      var clothCols = [0xc65b5b, 0x4f7a5e, 0x4a6fa5, 0xc78a2e, 0x7e5ba2];
+      for (let ci = 0; ci < 5; ci++) {
+        const hz = rodZc - rodLen / 2 + 0.25 + ci * ((rodLen - 0.5) / 4);
+        const g = new THREE.Group();
+        // 钩
+        const hook = new THREE.Mesh(new THREE.TorusGeometry(0.045, 0.012, 8, 16, Math.PI * 1.5), matMetal);
+        hook.position.set(0, 0.1, 0); hook.rotation.y = Math.PI / 2;
+        g.add(hook);
+        // 衣架横梁
+        box(0.04, 0.03, 0.34, matWoodDark, 0, 0.02, 0, g);
+        // 衣身（上窄下稍宽的两块拼起来，看着像衣服而不是纸片）
+        const cm = M(clothCols[ci % clothCols.length], { roughness: 0.95 });
+        box(0.1, 0.42, 0.3, cm, 0, -0.22, 0, g);
+        box(0.12, 0.5, 0.36, cm, 0, -0.65, 0, g);
+        g.position.set(cx + (Math.random() - 0.5) * 0.06, rodY - 0.02, hz);
+        g.rotation.y = (Math.random() - 0.5) * 0.12;
+        g.traverse(function (o) { if (o.isMesh) { o.castShadow = true; tag(o); } });
+        roomGroup.add(g);
+      }
+      // 右格叠放：两摞折叠衣 + 一个收纳盒（折叠衣也换深色，和浅盒子错开）
+      var foldCols = [0xc65b5b, 0x4a6fa5, 0x4f7a5e, 0x7e5ba2, 0xf3ece2, 0xc78a2e];
+      [[1.15, 0.35], [1.95, -0.15]].forEach(function (p, pi) {
+        for (let k = 0; k < 3; k++) {
+          tag(box(0.62, 0.13, 0.5, M(foldCols[(pi * 3 + k) % foldCols.length], { roughness: 1 }),
+            cx - 0.02, PLINTH + p[0] + k * 0.14, (midZ + z1) / 2 + p[1]));
+        }
+      });
+      tag(box(0.66, 0.34, 0.6, matCard, cx - 0.02, PLINTH + 0.32, (midZ + z1) / 2 - 0.1));
+      // 顶层：被子卷 + 空箱（从外面看不见，开门才看得到）
+      const quilt = cyl(0.28, 0.28, width - 0.5, matWhite, cx - 0.05, shelfY + 0.36, cz, 16);
+      quilt.rotation.x = Math.PI / 2; tag(quilt);
+      // ---- 两扇对开门（铰链组，场景层点 fid 时转开）----
+      // 之前门板是直接摆死的，里面也是实心。现在门挂在外侧铰链轴上：
+      // 左门轴在 z0 侧向 +z 伸，右门轴在 z1 侧向 -z 伸，开门都是往 +x 转。
+      // 门宽按侧板内口均分：内口 2.44，单门 1.22，
+      // 左 1.08→2.30、右 2.30→3.52，中间对缝不再漏（之前 1.14 太窄，
+      // 中间漏 0.16 的通缝）。不做叠合——同平面叠 0.04 会穿插。
+      // 门高 4.82，上下各留 0.04 阴影缝。
+      var doorH = height - 0.08, doorW = (width - 0.16) / 2;
+      var doorX = xF + 0.025;
+      function buildDoor(sign) {
+        // sign -1 左门 / +1 右门；铰链 z 取外缘
+        var hingeZ = sign < 0 ? z0 + 0.08 : z1 - 0.08;
+        var pivot = new THREE.Group();
+        pivot.position.set(doorX, DOOR_Y, hingeZ);
+        pivot.userData.fid = FID;
+        var dir = sign < 0 ? 1 : -1; // 门板在组内的延伸方向
+        // 门板（组内坐标，铰链在边缘）
+        box(0.05, doorH, doorW, matWoodTop, 0, 0, dir * doorW / 2, pivot);
+        // 内凹面板 + 细边框
+        box(0.02, doorH - 0.75, doorW - 0.34, matWood, 0.035, 0, dir * doorW / 2, pivot);
+        var fr = 0.05, fy = doorH - 0.75, fw = doorW - 0.34;
+        var fz = dir * doorW / 2;
+        box(0.015, fy, fr, matWoodTop, 0.05, 0, fz - fw / 2 + fr / 2, pivot);
+        box(0.015, fy, fr, matWoodTop, 0.05, 0, fz + fw / 2 - fr / 2, pivot);
+        box(0.015, fr, fw - fr * 2, matWoodTop, 0.05, fy / 2 - fr / 2, fz, pivot);
+        box(0.015, fr, fw - fr * 2, matWoodTop, 0.05, -fy / 2 + fr / 2, fz, pivot);
+        // 金色细拉手：杆径 0.022（原来 0.03，看着粗）、20 段 + 上下两个底座
+        // 位置靠门缝那一侧，悬在门板前方 8cm
+        var meetZ = dir * (doorW - 0.16);
+        var handle = new THREE.Mesh(
+          new THREE.CylinderGeometry(0.022, 0.022, 0.9, 20), matGold);
+        handle.position.set(0.1, 0, meetZ);
+        handle.castShadow = true;
+        pivot.add(tag(handle));
+        [-0.32, 0.32].forEach(function (dy) {
+          var stub = new THREE.Mesh(new THREE.CylinderGeometry(0.012, 0.012, 0.09, 12), matGold);
+          stub.rotation.z = Math.PI / 2;
+          stub.position.set(0.055, dy, meetZ);
+          pivot.add(tag(stub));
+        });
+        pivot.traverse(function (o) { if (o.isMesh) { o.castShadow = true; o.receiveShadow = true; tag(o); } });
+        roomGroup.add(pivot);
+        return pivot;
+      }
+      var doorL = buildDoor(-1);
+      var doorR = buildDoor(1);
+      // 交给场景层：点衣柜时 tween 这两个 pivot 的 rotation.y
+      api.wardrobe = { doorL: doorL, doorR: doorR, open: false, cx: cx, cz: cz };
+      // 柜顶不放东西（留空，看着利落，东西都收进柜内）
     })();
 
     // ---- 悬空搁板（左墙，和衣柜做成一体）----
@@ -1000,18 +1269,22 @@
     })();
 
     /* ================================================================
-       4. 床铺区（床头靠窗户那面墙，床身朝房间前方延伸）
+       4. 床铺区（床头朝窗户那面墙，但不贴墙 —— 往前挪了 0.6 给窗帘）
     ================================================================= */
-    // 床头对窗户（后墙那面）。左墙那面书柜落地到顶、贴着左墙排，
+    // 床头朝窗户（后墙那面）。左墙那面书柜落地到顶、贴着左墙排，
     // 床在它前面并排 —— 所以床的左边不能压到书柜那 0.95 米的进深，
-    // x 从 -4.25 起（右边缘 -0.85，窗户从 -1.4 开始，只挡到一点边）。
+    // x 从 -4.25 起（右边缘 -0.85）。窗洞现在开到 -4.23，
+    // 整张床的床头都落在窗前。
+    // 床头不再贴后墙：窗帘杆/帘布挂在 z -5.16，帘布合上时褶皱最远凸到
+    // z ≈ -4.93，原来床头板（-5.47..-5.12）整个和帘布穿模。
+    // 只挪到刚好不穿模：床头背面 -4.87，离帘布 0.06，离后墙 0.95。
     const bedX0 = -4.25, bedX1 = -0.85;   // 沿 X，3.4（床宽）
-    const bedZ0 = -5.15, bedZ1 = -0.05;   // 沿 Z，5.1（床长）
+    const bedZ0 = -4.55, bedZ1 = 0.55;    // 沿 Z，5.1（床长），离后墙 0.95
     const bedCx = (bedX0 + bedX1) / 2, bedCz = (bedZ0 + bedZ1) / 2;
     const bedL = bedZ1 - bedZ0;           // 长边，沿 Z
     const bedW = bedX1 - bedX0;           // 短边，沿 X
 
-    // 床头板（贴后墙），1.63 高 —— 再高会顶到书柜底板（1.95）
+    // 床头板（离后墙 0.95，刚好给窗帘让位），1.63 高 —— 再高会顶到书柜底板（1.95）
     box(bedW + 0.12, 1.55, 0.32, matWood, bedCx, 0.88, bedZ0 - 0.16);
     box(bedW + 0.2, 0.16, 0.42, matWoodTop, bedCx, 1.62, bedZ0 - 0.18);
 
@@ -1065,7 +1338,8 @@
       const heart = new THREE.Mesh(hg, M(0xcc4a4a, { roughness: 0.6 }));
       heart.scale.setScalar(0.62); heart.position.set(0, 0.42, 0.26);
       heart.castShadow = true; g.add(heart);
-      g.position.set(-2.85, 1.12, -2.65); g.rotation.y = 0.95; g.scale.setScalar(0.92);
+      // 床往前挪了 0.6，小熊跟着挪 —— 被子盖到 z -2.61 起，不挪就坐床单上了
+      g.position.set(-2.85, 1.12, -1.95); g.rotation.y = 0.95; g.scale.setScalar(0.92);
       roomGroup.add(g);
     })();
 
@@ -1076,47 +1350,69 @@
       const b = new THREE.Mesh(new THREE.CylinderGeometry(0.36, 0.3, 0.5, 14, 3, true), wm);
       b.position.y = 0.32; b.castShadow = true; g.add(b);
       cyl(0.34, 0.34, 0.05, wm, 0, 0.07, 0, 14, g);
-      g.position.set(-3.55, 0, 0.45);
+      // 床脚挪到 z 0.55 了，花架跟着往前让（原 0.45 会被床压住）
+      g.position.set(-3.55, 0, 1.1);
       roomGroup.add(g);
-      pottedPlant(-3.6, 0.5, 0.45, 0.85, matCard);
+      pottedPlant(-3.6, 0.5, 1.1, 0.85, matCard);
     })();
 
     /* ================================================================
-       5. 暖气片 (左前方)
+       5. 暖气片已删（挡衣柜门）
     ================================================================= */
-    (function radiator() {
-      const rx = -3.92, z0 = 1.0, z1 = 4.6;
-      const n = 12;
-      for (let i = 0; i < n; i++) {
-        rbox(0.34, 1.45, 0.17, 0.07, matWhite, rx, 0.85, z0 + 0.12 + i * ((z1 - z0 - 0.24) / (n - 1)));
-      }
-      box(0.46, 0.12, z1 - z0, matWhite, rx, 1.62, (z0 + z1) / 2);
-      box(0.3, 0.1, z1 - z0, matWhite, rx, 0.16, (z0 + z1) / 2);
-      cyl(0.05, 0.05, 0.4, matMetal, rx, 0.1, z0 + 0.1, 10);
-      cyl(0.05, 0.05, 0.4, matMetal, rx, 0.1, z1 - 0.1, 10);
-      // 阀门
-      sph(0.09, matMetal, rx, 1.62, z1 - 0.05);
-    })();
 
     /* ================================================================
        6. 后墙右侧：落地灯、单人沙发、圆几、镜子、斗柜
     ================================================================= */
-    // 落地灯
+    // 落地灯：全白极简 —— 白底盘、白细杆、白布罩（不要黄铜件，整体缩小一号）。
+    // 灯泡走 Standard + emissive，关灯时 toggleLamp 会把它和灯罩一起压暗。
     (function floorLamp() {
       const g = new THREE.Group();
-      cyl(0.22, 0.26, 0.08, matWoodDark, 0, 0.04, 0, 18, g);
-      cyl(0.045, 0.045, 3.0, matWoodDark, 0, 1.5, 0, 10, g);
-      const shade = new THREE.Mesh(new THREE.CylinderGeometry(0.28, 0.46, 0.72, 20, 1, true),
-        new THREE.MeshStandardMaterial({ color: 0xfff3d6, roughness: 1, side: THREE.DoubleSide,
-          emissive: 0xffd9a0, emissiveIntensity: 0.55, envMapIntensity: 0.15 }));
-      shade.position.y = 3.15; shade.castShadow = true; g.add(shade);
-      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.1, 10, 8),
-        new THREE.MeshBasicMaterial({ color: 0xffe6b8 }));
-      bulb.position.y = 3.1; g.add(bulb);
+
+      // 白布罩织纹：极淡的横纬，只留一点布感
+      const shadeTex = makeTex(128, 64, (q, w, h) => {
+        q.fillStyle = '#fdfaf4'; q.fillRect(0, 0, w, h);
+        for (let y = 0; y < h; y += 3) {
+          q.fillStyle = 'rgba(240,235,225,0.5)'; q.fillRect(0, y, w, 1);
+        }
+      }, 2, 1);
+
+      // 底座：白色配重盘 + 杆脚
+      cyl(0.22, 0.26, 0.06, matWhite, 0, 0.03, 0, 22, g);
+      cyl(0.06, 0.08, 0.05, matWhite, 0, 0.08, 0, 14, g);
+
+      // 灯杆
+      cyl(0.026, 0.026, 2.6, matWhite, 0, 1.38, 0, 10, g);   // 0.08..2.68
+
+      // 灯罩：白布，上窄下宽
+      const shadeMat = new THREE.MeshStandardMaterial({
+        color: 0xffffff, map: shadeTex, roughness: 1, side: THREE.DoubleSide,
+        emissive: 0xffd9a0, emissiveIntensity: 0.5, envMapIntensity: 0.15
+      });
+      const SH = 0.6, RT = 0.24, RB = 0.40, SY = 2.95;       // 罩 2.65..3.25
+      const shade = new THREE.Mesh(new THREE.CylinderGeometry(RT, RB, SH, 24, 1, true), shadeMat);
+      shade.position.y = SY; shade.castShadow = true; g.add(shade);
+
+      // 顶盖：带下沿的帽盖，裙边扣在罩口外（r 0.27 > 罩顶 0.24，罩壁收进盖里，
+      // 不再是平搁在沿上留一条缝）；和罩子同色微发光，避免交界显黑线
+      const capMat = new THREE.MeshStandardMaterial({
+        color: 0xfdfaf4, roughness: 0.9, envMapIntensity: 0.25,
+        emissive: 0xffd9a0, emissiveIntensity: 0.4
+      });
+      cyl(RT + 0.03, RT + 0.03, 0.07, capMat, 0, SY + SH / 2 - 0.01, 0, 24, g);
+
+      // 灯泡（关灯会跟着暗）
+      const bulb = new THREE.Mesh(new THREE.SphereGeometry(0.07, 12, 10),
+        new THREE.MeshStandardMaterial({
+          color: 0xfff1cc, roughness: 0.45,
+          emissive: 0xffe6b8, emissiveIntensity: 1.5, envMapIntensity: 0.2
+        }));
+      bulb.position.y = 2.87; g.add(bulb);
+
       const pt = new THREE.PointLight(0xffd9a5, 0.85 * POINT_SCALE, 9, 2);
       api.lampLight = pt;
-      pt.position.y = 3.0; g.add(pt);
-      g.position.set(1.5, 0, -4.6);
+      pt.position.y = 2.9; g.add(pt);
+      // 沙发(2.2,-2.6)右侧（靠床那边）：X = 1.4, Z = -2.0
+      g.position.set(1.4, 0, -2.0);
       roomGroup.add(g);
     })();
 
@@ -1178,10 +1474,56 @@
       const fg = new THREE.ExtrudeGeometry(archShape(w, h),
         { depth: 0.12, bevelEnabled: true, bevelSize: 0.035, bevelThickness: 0.035, bevelSegments: 2, curveSegments: 14 });
       const frame = new THREE.Mesh(fg, matWood); frame.castShadow = true; g.add(frame);
-      const gg = new THREE.ExtrudeGeometry(archShape(w - 0.24, h - 0.24),
-        { depth: 0.03, bevelEnabled: false, curveSegments: 14 });
-      const glassM = new THREE.Mesh(gg, matMirror);
-      glassM.position.z = 0.13; g.add(glassM);
+      // 真镜面（自制平面反射，不用 three 的 Reflector）。
+      // Reflector 的 oblique 斜裁剪是按透视相机推的，正交下裁剪面算废、
+      // 整个反射被裁掉——这是之前照不出的原因。正交配正交反而简单：
+      // 一台和镜面同尺寸视口的正交虚相机贴在镜前、沿法线看房间，
+      // 离线渲到 512 target 再贴回镜面（ShapeGeometry 的 UV 就是形坐标，
+      // 用 repeat/offset 归一化即可）。每帧一次，和场景渲染同循环。
+      var glassM = null;
+      try {
+        const MW = w - 0.24, MH = h - 0.24;
+        const rt = new THREE.WebGLRenderTarget(512, 512);
+        const vcam = new THREE.OrthographicCamera(-MW / 2, MW / 2, MH / 2, -MH / 2, 0.05, 60);
+        rt.texture.repeat.set(1 / MW, 1 / MH);
+        rt.texture.offset.set(0.5, 0.5);
+        const mmat = new THREE.MeshBasicMaterial({ map: rt.texture, color: 0xe4ebef });
+        glassM = new THREE.Mesh(new THREE.ShapeGeometry(archShape(MW, MH), 14), mmat);
+        glassM.position.z = 0.165; // 框前面板到 0.155，镜面浮在框前
+        (function () {
+          var busy = false;
+          var wp = new THREE.Vector3(), n = new THREE.Vector3(), up = new THREE.Vector3();
+          glassM.onBeforeRender = function (renderer, scene, camera) {
+            if (busy || !camera) return;
+            busy = true;
+            var vis = glassM.visible;
+            glassM.visible = false;
+            glassM.getWorldPosition(wp);
+            n.set(0, 0, 1).applyQuaternion(glassM.getWorldQuaternion(new THREE.Quaternion()));
+            up.set(0, 1, 0).applyQuaternion(glassM.getWorldQuaternion(new THREE.Quaternion()));
+            vcam.position.copy(wp);
+            vcam.up.copy(up);
+            vcam.lookAt(wp.x + n.x, wp.y + n.y, wp.z + n.z);
+            vcam.updateMatrixWorld();
+            var curTarget = renderer.getRenderTarget();
+            var curShadow = renderer.shadowMap.autoUpdate;
+            renderer.shadowMap.autoUpdate = false;
+            renderer.setRenderTarget(rt);
+            renderer.render(scene, vcam);
+            renderer.setRenderTarget(curTarget);
+            renderer.shadowMap.autoUpdate = curShadow;
+            glassM.visible = vis;
+            busy = false;
+          };
+        })();
+        api.mirrorReflector = { dispose: function () { rt.dispose(); mmat.dispose(); } };
+      } catch (e) { glassM = null; }
+      if (!glassM) {
+        glassM = new THREE.Mesh(new THREE.ExtrudeGeometry(archShape(w - 0.24, h - 0.24),
+          { depth: 0.03, bevelEnabled: false, curveSegments: 14 }), matMirror);
+        glassM.position.z = 0.13; // 挤出自带厚度，前沿 0.16 本来就在框前
+      }
+      g.add(glassM);
       g.position.set(4.35, 2.08, -5.02);
       g.rotation.set(-0.07, -0.14, 0);
       roomGroup.add(g);
@@ -1240,10 +1582,11 @@
       roomGroup.add(g);
     })();
 
-    // 墙面小画 (斗柜上方 & 窗上方：帘顶 5.52，画必须让出帘布带)
+    // 墙面小画 (斗柜上方：窗上那幅挪走了 —— 窗帘盒顶到 6.04，原位会互相穿模)
     wallArt(4.3, 3.75, -SIZE / 2 + 0.05, 1.0, 1.3, artTex('dots'));
     wallArt(5.15, 3.5, -SIZE / 2 + 0.05, 0.62, 0.8, artTex('leaf'));
-    wallArt(0.6, 5.95, -SIZE / 2 + 0.05, 0.6, 0.6, artTex('arch'));
+    // 窗上的拱形小画上移到斗柜画组顶上（y4.80..5.40，右缘离窗帘盒端头 3.75 有 0.4 净空）
+    wallArt(4.45, 5.1, -SIZE / 2 + 0.05, 0.6, 0.6, artTex('arch'));
 
     // 左墙的画：挂成搁板上方的横排。
     //

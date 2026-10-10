@@ -43,6 +43,9 @@
       '  <button id="bd-curtain" class="bd-btn bd-btn-on">🪞 <span>帘</span></button>',
       '  <i class="bd-sep"></i>',
       '  <button id="bd-reset" class="bd-btn" title="恢复默认视角">🔄 <span>视角</span></button>',
+      '  <i class="bd-sep"></i>',
+      '  <button id="bd-char-girl" class="bd-btn bd-btn-on" title="选中女孩">👧 <span>女孩</span></button>',
+      '  <button id="bd-char-ghost" class="bd-btn" title="选中 Ghost">💀 <span>Ghost</span></button>',
       '</footer>',
 
       // ---- 浮动提示 ----

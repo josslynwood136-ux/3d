@@ -1140,6 +1140,373 @@ button { border: 0; cursor: pointer; }
 .mem-link-row.on .mem-link-ck { color: #2f9b57; }
 .mem-link-empty { font-size: 12px; color: #b8a99a; padding: 12px 0; text-align: center; }
 
+/* ===== 桌面网格布局（精致美化版） ===== */
+.desktop-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  overflow: hidden;
+  background: linear-gradient(135deg, #a1c4fd 0%, #c2e9fb 50%, #fbc2eb 100%);
+  -webkit-user-select: none;
+  user-select: none;
+}
+.desktop-content {
+  width: 100%;
+  height: 100%;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 24px 16px;
+  box-sizing: border-box;
+}
+.desktop-container .wallpaper {
+  position: absolute;
+  top: 0; left: 0;
+  width: 100%; height: 100%;
+  object-fit: cover;
+  pointer-events: none;
+  z-index: 0;
+  filter: brightness(0.96) saturate(1.05);
+}
+.desktop-container::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(circle at 50% 20%, rgba(255,255,255,0.15) 0%, rgba(0,0,0,0.12) 100%);
+  pointer-events: none;
+  z-index: 1;
+}
+/* ===== App 图标网格 ===== */
+.app-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+  row-gap: 28px;
+  width: 100%;
+  max-width: 420px;
+  z-index: 10;
+  margin-top: auto;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+}
+.app-icon {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  width: var(--desktop-icon-size, 64px);
+  height: var(--desktop-icon-size, 64px);
+  padding: 8px;
+  cursor: pointer;
+  border-radius: var(--icon-radius, 16px);
+  background: var(--desktop-icon-bg, rgba(255, 255, 255, 0.65));
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid rgba(255, 255, 255, 0.75);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  transition: transform 0.18s cubic-bezier(0.34, 1.56, 0.64, 1), background 0.15s ease, box-shadow 0.15s ease;
+  -webkit-tap-highlight-color: transparent;
+  box-sizing: border-box;
+  position: relative;
+}
+.app-icon:hover {
+  transform: translateY(-2px);
+  background: rgba(255, 255, 255, 0.8);
+  box-shadow: 0 14px 36px rgba(0, 0, 0, 0.14), inset 0 1px 0 rgba(255, 255, 255, 1);
+}
+.app-icon:active {
+  transform: scale(0.92);
+  background: rgba(255, 255, 255, 0.9);
+}
+.app-icon-shape-rounded { border-radius: 16px; }
+.app-icon-shape-square { border-radius: 8px; }
+.app-icon-shape-circle { border-radius: 50%; }
+
+.app-icon .app-icon-svg {
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  color: #2c2825;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.08));
+}
+.app-icon .app-icon-svg svg {
+  width: 100%;
+  height: 100%;
+  stroke-width: 2.1;
+}
+.app-icon .app-icon-label {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 50%;
+  transform: translateX(-50%);
+  font-size: 11px;
+  font-weight: 500;
+  color: #ffffff;
+  text-shadow: 0 1px 4px rgba(0, 0, 0, 0.8), 0 0 10px rgba(0, 0, 0, 0.4);
+  white-space: nowrap;
+  letter-spacing: 0.2px;
+  line-height: 1.2;
+  z-index: 5;
+  pointer-events: none;
+}
+
+/* ===== Widget ===== */
+.widget-area {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+  max-width: 420px;
+  z-index: 10;
+  margin-bottom: 12px;
+}
+.widget {
+  border-radius: 20px;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  padding: 14px 18px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  overflow: hidden;
+}
+.widget-clock {
+  background: rgba(255, 255, 255, 0.65);
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 14px 10px;
+}
+.widget-clock-time {
+  font-size: 28px;
+  font-weight: 700;
+  color: #2c2825;
+  letter-spacing: 0.5px;
+  text-shadow: 0 1px 2px rgba(255,255,255,0.8);
+}
+.widget-clock-date {
+  font-size: 11px;
+  color: #7a7066;
+  font-weight: 500;
+  margin-top: 3px;
+}
+.widget-notes {
+  flex: 1;
+  background: rgba(255, 255, 255, 0.55);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: #3d3732;
+  font-weight: 500;
+  min-width: 0;
+  padding: 14px 12px;
+}
+.widget-notes-icon {
+  font-size: 22px;
+  filter: drop-shadow(0 2px 4px rgba(0,0,0,0.1));
+}
+.widget-notes-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ===== 天气小组件 ===== */
+.widget-weather {
+  background: linear-gradient(135deg, rgba(135, 206, 250, 0.75), rgba(167, 199, 231, 0.65));
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  flex: 1;
+  min-width: 0;
+  gap: 2px;
+  position: relative;
+  padding: 14px 10px;
+}
+.widget-weather-icon {
+  font-size: 28px;
+  filter: drop-shadow(0 2px 6px rgba(0,0,0,0.15));
+  line-height: 1;
+}
+.widget-weather-info {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+.widget-weather-temp {
+  font-size: 18px;
+  font-weight: 700;
+  color: #1a3a5c;
+  line-height: 1.2;
+}
+.widget-weather-desc {
+  font-size: 10px;
+  color: #4a6a8a;
+  line-height: 1.2;
+}
+.widget-weather-city {
+  font-size: 10px;
+  color: #5a7a9a;
+  margin-top: 2px;
+}
+
+/* ===== 待办小组件 ===== */
+.widget-todo {
+  width: 100%;
+  max-width: 420px;
+  z-index: 10;
+  margin-bottom: 12px;
+  background: rgba(255, 255, 255, 0.6);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid rgba(255, 255, 255, 0.7);
+  border-radius: 20px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.1), inset 0 1px 0 rgba(255, 255, 255, 0.9);
+  overflow: hidden;
+}
+.widget-todo-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 8px;
+}
+.widget-todo-icon {
+  font-size: 18px;
+}
+.widget-todo-title {
+  font-size: 14px;
+  font-weight: 700;
+  color: #2c2825;
+}
+.widget-todo-count {
+  margin-left: auto;
+  font-size: 12px;
+  font-weight: 600;
+  color: #7a7066;
+  background: rgba(0,0,0,0.06);
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+.widget-todo-list {
+  padding: 0 16px 12px;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.widget-todo-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 0;
+  font-size: 13px;
+  color: #3d3732;
+  border-bottom: 1px solid rgba(0,0,0,0.05);
+}
+.widget-todo-item:last-child {
+  border-bottom: none;
+}
+.widget-todo-check {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  border: 2px solid #b8a99a;
+  flex-shrink: 0;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+.widget-todo-check.done {
+  background: #7aab7a;
+  border-color: #7aab7a;
+  position: relative;
+}
+.widget-todo-check.done::after {
+  content: '✓';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+}
+.widget-todo-text {
+  flex: 1;
+}
+.widget-todo-text.done {
+  text-decoration: line-through;
+  color: #b8a99a;
+}
+
+/* ===== 分页指示器 ===== */
+.page-indicator {
+  position: absolute;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  z-index: 15;
+}
+.page-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.5);
+  transition: all 0.3s;
+}
+.page-dot.active {
+  width: 18px;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+/* ===== 外观设置面板 ===== */
+.appearance-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 2000;
+  background: rgba(0,0,0,.35);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .24s ease;
+}
+.appearance-overlay.show {
+  opacity: 1;
+  visibility: visible;
+}
+.appearance-sheet {
+  width: 100%;
+  max-height: 70%;
+  background: #fff;
+  border-radius: 16px 16px 0 0;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  box-sizing: border-box;
+  transform: translateY(20px);
+  transition: transform .18s;
+}
+.appearance-overlay.show .appearance-sheet {
+  transform: translateY(0);
+}
+.appearance-header {
+  display: flex;
+  align-items: center;
+  font-size: 15px;
+  font-weight: 700;
+  color: #4a3f35;
+  margin-bottom: 10px;
+}
+.appearance-body {
+  overflow-y: auto;
+}
+
 .model-tag {
   display:inline-block;font-size:11px;padding:3px 8px;border:1px solid #e0ddd8;
   border-radius:6px;cursor:pointer;color:#4a3f35;background:#fff;
@@ -3227,10 +3594,12 @@ button { border: 0; cursor: pointer; }
   animation:rpShake .4s ease;
 }
 @keyframes rpShake {
-  0%{transform:scale(1)} 20%{transform:scale(1.06)} 40%{transform:scale(.97)}
-  60%{transform:scale(1.02)} 80%{transform:scale(.99)} 100%{transform:scale(1)}
+  0%, 100% { transform: translateX(0) rotate(0deg); }
+  20% { transform: translateX(-5px) rotate(-2deg); }
+  40% { transform: translateX(5px) rotate(2deg); }
+  60% { transform: translateX(-4px) rotate(-1.5deg); }
+  80% { transform: translateX(4px) rotate(1.5deg); }
 }
-
 /* ===== 音乐播放器 · 复古唱片店风 ===== */
 .music-page { display:flex; flex-direction:column; min-height:100%; }
 .music-page::before { content:''; position:absolute; left:50%; top:120px; width:420px; height:420px; transform:translateX(-50%); background:radial-gradient(circle, rgba(108,127,87,.08) 0%, transparent 60%); pointer-events:none; }

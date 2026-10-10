@@ -139,7 +139,8 @@
     controls.dampingFactor = 0.06;
     controls.target.copy(defaultLookAt);
     controls.minZoom = 0.6;
-    controls.maxZoom = 2.4;
+    controls.maxZoom = 3.6;      // 与卧室一致，放大上限调大（原 2.4）
+    controls.zoomSpeed = 1.4;
     controls.minPolarAngle = Math.PI / 4.4;
     controls.maxPolarAngle = Math.PI / 2.2;
     controls.minAzimuthAngle = -Math.PI / 16;

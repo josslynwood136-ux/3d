@@ -33,7 +33,7 @@ function openApp(name) {
       if (ha) ha.style.background = '#f0ede8';
     }
     const map = {
-      '设置': renderApiSettings, '打卡': renderCheckins,
+      'API': renderApiSettings, '设置': renderApiSettings, '打卡': renderCheckins,
       '家园': function () { Home.open(); }, '日记': renderDiary, '自习': renderStudy, '自习室': renderStudy,
       '养多肉': renderPlant, '多肉': renderPlant, '账本': renderLedger, '涂鸦': renderDoodle,
       '音乐': renderMusic, '啵啵': renderLiveHall, '啵啵间': renderLiveHall, '线下': renderOffline, '相册': renderAlbum, '表情包': renderStickerManager,
@@ -108,6 +108,8 @@ function switchTab(t, el) {
   if (t === 'me') renderMyProfile();
 }
 
+// ---------- 设置 ----------
+// ---------- 设置 ----------
 // ---------- 设置 ----------
 function renderApiSettings() {
   var profiles = state.apiProfiles || [];
