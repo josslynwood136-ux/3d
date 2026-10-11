@@ -90,7 +90,7 @@ function closeApp() {
   $('slider').style.overflowX = 'auto';
   $('slider').style.cursor = 'grab';
   const dbg = document.querySelector('.debug-btn');
-  if (dbg) dbg.style.display = 'block';
+  if (dbg) dbg.style.display = 'none';
   closeChat();
   closeSettings();
   stopGame();

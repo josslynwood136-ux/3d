@@ -29,6 +29,7 @@ function setAppearanceWallpaper(val) {
   state.settings.desktopWallpaper = val || '';
   saveState();
   applyAppearanceStyle();
+  if (typeof saveDeskPhotosBackup === 'function') saveDeskPhotosBackup();
 }
 function setAppearanceIconSize(val) {
   state.settings.desktopIconSize = val || 'medium';

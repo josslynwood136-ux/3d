@@ -32,12 +32,14 @@ var APP_ICONS = [
 ];
 
 function renderAppGrid() {
-  var grid = $('appGrid');
-  if (!grid) return;
-  grid.innerHTML = '';
+  var g1 = $('appGrid'), g2 = $('appGrid2');
+  if (!g1 || !g2) return;
+  g1.innerHTML = ''; g2.innerHTML = '';
+  var page1Names = { '音乐': 1, '相册': 1, 'IG': 1, '恋爱日记': 1, '自习室': 1, '养多肉': 1, '账本': 1, '涂鸦': 1, '线下': 1, '许愿柳': 1, '游戏房': 1, '直播间': 1 };
   APP_ICONS.forEach(function(app) {
     var el = document.createElement('div');
-    el.className = 'app-icon';
+    var sizeCls = app.name === '音乐' ? ' tile-big' : (app.name === '相册' ? ' tile-wide' : '');
+    el.className = 'app-icon' + sizeCls;
     el.setAttribute('data-name', app.name);
     el.innerHTML = '<div class="app-icon-svg">' + (app.svg || app.icon) + '</div><div class="app-icon-label">' + app.name + '</div>';
     el.addEventListener('click', function() {
@@ -45,8 +47,57 @@ function renderAppGrid() {
       if (app.name === '许愿柳') { showWillowPortal(); return; }
       openApp(app.name);
     });
-    grid.appendChild(el);
+    (page1Names[app.name] ? g1 : g2).appendChild(el);
   });
+}
+
+// ===== 桌面图标分页：横向滑动 + 分页点同步 =====
+function initAppPages() {
+  var pages = $('appPages');
+  if (!pages) return;
+  var ind = $('pageIndicator');
+  var dots = ind ? ind.querySelectorAll('.page-dot') : [];
+  var syncDots = function(idx) {
+    for (var i = 0; i < dots.length; i++) dots[i].classList.toggle('active', i === idx);
+  };
+  pages.addEventListener('scroll', function() {
+    var w = pages.clientWidth || 1;
+    syncDots(Math.round(pages.scrollLeft / w));
+  });
+  for (var i = 0; i < dots.length; i++) {
+    (function(idx) {
+      dots[i].addEventListener('click', function() {
+        pages.scrollTo({ left: idx * pages.clientWidth, behavior: 'smooth' });
+      });
+    })(i);
+  }
+  // 鼠标拖拽翻页（桌面浏览器用；触屏走原生滑动）
+  var down = false, moved = false, startX = 0, startL = 0, suppressNext = false;
+  pages.addEventListener('pointerdown', function(e) {
+    if (e.pointerType !== 'mouse') return;
+    down = true; moved = false; startX = e.clientX; startL = pages.scrollLeft;
+  });
+  window.addEventListener('pointermove', function(e) {
+    if (!down) return;
+    var dx = e.clientX - startX;
+    if (Math.abs(dx) > 8) moved = true;
+    pages.scrollLeft = startL - dx;
+  });
+  window.addEventListener('pointerup', function() {
+    if (!down) return;
+    down = false;
+    if (moved) {
+      var w = pages.clientWidth || 1;
+      var idx = Math.round(pages.scrollLeft / w);
+      pages.scrollTo({ left: idx * w, behavior: 'smooth' });
+      syncDots(idx);
+      suppressNext = true;
+      setTimeout(function() { suppressNext = false; }, 220);
+    }
+  });
+  pages.addEventListener('click', function(e) {
+    if (suppressNext) { e.stopPropagation(); e.preventDefault(); }
+  }, true);
 }
 
 // 时钟更新
@@ -58,6 +109,10 @@ function updateClock() {
   if (timeEl) timeEl.textContent = h + ':' + m;
   var dateEl = $('widgetDate');
   if (dateEl) dateEl.textContent = now.getFullYear() + '/' + (now.getMonth()+1) + '/' + now.getDate();
+  var medT = $('medTime');
+  if (medT) medT.textContent = h + ':' + m;
+  var medD = $('medDate');
+  if (medD) medD.textContent = (now.getMonth()+1) + '/' + now.getDate();
 }
 
 // ===== 天气小组件 =====
@@ -112,6 +167,172 @@ function toggleTodo(idx) {
   renderTodoWidget();
 }
 
+// ===== 桌面大方照片（点选本地图片，自动压缩后存档） =====
+function initDeskPhoto() {
+  var box = $('deskPhoto'), img = $('deskPhotoImg'),
+      hint = $('deskPhotoHint'), file = $('deskPhotoFile');
+  if (!box || !img || !file) return;
+  // 本地预览服务器备份兜底：浏览器存储被清空时自动恢复照片
+  function saveDeskPhotosBackup() {
+    try {
+      var s = state.settings || {};
+      fetch('/__meilodi/photos', {
+        method: 'POST',
+        body: JSON.stringify({
+          photo: s.desktopPhoto || '',
+          medal: s.desktopMedalPhoto || '',
+          frames: s.desktopFrames || [],
+          wallpaper: s.desktopWallpaper || ''
+        })
+      }).catch(function() {});
+    } catch(e) {}
+  }
+  window.saveDeskPhotosBackup = saveDeskPhotosBackup;
+  function renderDeskFrames() {
+    var fr = $('deskFrames');
+    if (!fr) return;
+    var fArr = (state.settings && state.settings.desktopFrames) || [];
+    for (var i = 0; i < 4; i++) {
+      var fim = $('deskFrameImg' + i);
+      var u = fArr[i];
+      if (fim) { fim.style.display = u ? 'block' : 'none'; if (u && fim.src !== u) fim.src = u; }
+    }
+  }
+  fetch('/__meilodi/photos').then(function(r) { return r.json(); }).then(function(bk) {
+    try {
+      if (!bk || typeof bk !== 'object') return;
+      if (!state.settings) state.settings = {};
+      var changed = false;
+      if (!state.settings.desktopPhoto && bk.photo) { state.settings.desktopPhoto = bk.photo; changed = true; }
+      if (!state.settings.desktopMedalPhoto && bk.medal) { state.settings.desktopMedalPhoto = bk.medal; changed = true; }
+      if ((!state.settings.desktopFrames || !state.settings.desktopFrames.length) && bk.frames && bk.frames.length) { state.settings.desktopFrames = bk.frames; changed = true; }
+      if (!state.settings.desktopWallpaper && bk.wallpaper) { state.settings.desktopWallpaper = bk.wallpaper; changed = true; }
+      if (changed) {
+        saveState();
+        if (state.settings.desktopPhoto) { img.src = state.settings.desktopPhoto; img.style.display = 'block'; if (hint) hint.style.display = 'none'; }
+        renderDeskFrames();
+        var wpEl = $('wallpaper');
+        if (wpEl && state.settings.desktopWallpaper) wpEl.src = state.settings.desktopWallpaper;
+      }
+    } catch(e) {}
+  }).catch(function() {});
+  var fitPhoto = function() { box.style.height = Math.round(box.offsetWidth * 9 / 16) + 'px'; };
+  fitPhoto();
+  window.addEventListener('resize', fitPhoto);
+  var src = (state.settings && state.settings.desktopPhoto) || '';
+  if (src) {
+    img.src = src; img.style.display = 'block';
+    if (hint) hint.style.display = 'none';
+  }
+  // 点选由透明 input 原生接收，这里只处理选图后的事
+  file.addEventListener('change', function() {
+    var f = file.files && file.files[0];
+    if (!f) return;
+    var rd = new FileReader();
+    rd.onload = function() {
+      var im = new Image();
+      im.onload = function() {
+        try {
+          var max = 1200, w = im.width, h = im.height;
+          var sc = Math.min(1, max / Math.max(w, h));
+          var cv = document.createElement('canvas');
+          cv.width = Math.round(w * sc); cv.height = Math.round(h * sc);
+          cv.getContext('2d').drawImage(im, 0, 0, cv.width, cv.height);
+          var url = cv.toDataURL('image/jpeg', 0.85);
+          if (!state.settings) state.settings = {};
+          state.settings.desktopPhoto = url;
+          saveState();
+          saveDeskPhotosBackup();
+          img.src = url; img.style.display = 'block';
+          if (hint) hint.style.display = 'none';
+        } catch(e) { alert('照片太大，换一张小一点的试试'); }
+      };
+      im.src = rd.result;
+    };
+    rd.readAsDataURL(f);
+    file.value = '';
+  });
+  // 圆牌小图（点圆牌换图，有图时盖住时钟）
+  var medal = $('deskMedal'), mImg = $('deskMedalImg'),
+      mClock = $('deskMedalClock'), mFile = $('deskMedalFile');
+  if (medal && mImg && mFile) {
+    var mSrc = (state.settings && state.settings.desktopMedalPhoto) || '';
+    if (mSrc) {
+      mImg.src = mSrc; mImg.style.display = 'block';
+      if (mClock) mClock.style.display = 'none';
+    }
+    medal.addEventListener('click', function(e) { e.stopPropagation(); });
+    mFile.addEventListener('change', function() {
+      var mf = mFile.files && mFile.files[0];
+      if (!mf) return;
+      var mrd = new FileReader();
+      mrd.onload = function() {
+        var mim = new Image();
+        mim.onload = function() {
+          try {
+            var mmax = 400, mw = mim.width, mh = mim.height;
+            var msc = Math.min(1, mmax / Math.max(mw, mh));
+            var mcv = document.createElement('canvas');
+            mcv.width = Math.round(mw * msc); mcv.height = Math.round(mh * msc);
+            mcv.getContext('2d').drawImage(mim, 0, 0, mcv.width, mcv.height);
+            var murl = mcv.toDataURL('image/jpeg', 0.85);
+            if (!state.settings) state.settings = {};
+            state.settings.desktopMedalPhoto = murl;
+            saveState();
+            saveDeskPhotosBackup();
+            mImg.src = murl; mImg.style.display = 'block';
+            if (mClock) mClock.style.display = 'none';
+          } catch(e) { alert('照片太大，换一张小一点的试试'); }
+        };
+        mim.src = mrd.result;
+      };
+      mrd.readAsDataURL(mf);
+      mFile.value = '';
+    });
+  }
+  // 四个小相框（点框换图，有图显示图，没图显示小涂鸦占位）
+  var frames = $('deskFrames');
+  if (frames) {
+    var fArr0 = (state.settings && state.settings.desktopFrames) || [];
+    for (var fi = 0; fi < 4; fi++) {
+      (function(idx) {
+        var inp = frames.querySelector('.desk-file[data-fi="' + idx + '"]');
+        var fim = $('deskFrameImg' + idx);
+        if (!inp || !fim) return;
+        var u0 = fArr0[idx];
+        if (u0) { fim.src = u0; fim.style.display = 'block'; }
+        inp.addEventListener('change', function() {
+          var ff = inp.files && inp.files[0];
+          if (!ff) return;
+          var frd = new FileReader();
+          frd.onload = function() {
+            var fim2 = new Image();
+            fim2.onload = function() {
+              try {
+                var fmax = 800, fw = fim2.width, fh = fim2.height;
+                var fsc = Math.min(1, fmax / Math.max(fw, fh));
+                var fcv = document.createElement('canvas');
+                fcv.width = Math.round(fw * fsc); fcv.height = Math.round(fh * fsc);
+                fcv.getContext('2d').drawImage(fim2, 0, 0, fcv.width, fcv.height);
+                var furl = fcv.toDataURL('image/jpeg', 0.85);
+                if (!state.settings) state.settings = {};
+                if (!state.settings.desktopFrames) state.settings.desktopFrames = ['', '', '', ''];
+                state.settings.desktopFrames[idx] = furl;
+                saveState();
+                saveDeskPhotosBackup();
+                fim.src = furl; fim.style.display = 'block';
+              } catch(e) { alert('照片太大，换一张小一点的试试'); }
+            };
+            fim2.src = frd.result;
+          };
+          frd.readAsDataURL(ff);
+          inp.value = '';
+        });
+      })(fi);
+    }
+  }
+}
+
 // 初始化入口
 function init() {
   function setPhoneH() {
@@ -136,10 +357,12 @@ function init() {
   }
   renderChat();
   renderAppGrid();
+  initAppPages();
   renderWeatherWidget();
   renderTodoWidget();
   updateClock();
   setInterval(updateClock, 30000);
+  initDeskPhoto();
   initDragDesktop();
   bindHotspots();
   // 更多面板：点击选项项后自动关闭
