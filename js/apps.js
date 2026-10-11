@@ -2639,11 +2639,37 @@ function playTrack(song, list) {
     renderMusic();
     updateMiniPlayer();
   }).catch(function() {
-    playing = false;
-    renderMusic();
-    updateMiniPlayer();
-    alert('无法获取这首歌曲的音频。');
+    // VIP / 无版权歌曲拿不到完整音频（网易云对未登录用户返回空地址）。
+    // 退化：去 iTunes 找同名 30 秒试听顶上，实在没有才报错。
+    itunesPreview(song).then(function(url) {
+      song.previewUrl = url;
+      song.duration = 30;
+      audioEl.src = url;
+      audioEl.currentTime = 0;
+      audioEl.play().catch(function() { playing = false; updateMiniPlayer(); });
+      startTick();
+      renderMusic();
+      updateMiniPlayer();
+      if (window.uiToast) uiToast('完整版需要登录 VIP，已切换为 30 秒试听');
+    }).catch(function() {
+      playing = false;
+      renderMusic();
+      updateMiniPlayer();
+      alert('无法获取这首歌的音频。\n\n原因：这首歌可能是 VIP / 无版权歌曲，未登录拿不到播放地址。\n\n可尝试：① 换一首歌；② 点顶部「登录网易云」扫码解锁；③ 切到 QQ 源搜索。');
+    });
   });
+}
+// iTunes 30 秒试听兜底：按 歌名+歌手 搜，取第一条有 previewUrl 的
+function itunesPreview(song) {
+  const kw = encodeURIComponent((song.name || '') + ' ' + (song.artist || ''));
+  const url = 'https://itunes.apple.com/search?term=' + kw + '&entity=song&country=cn&limit=5';
+  return fetch(url, { signal: AbortSignal.timeout(10000) })
+    .then(function(res) { if (!res.ok) throw new Error(res.status); return res.json(); })
+    .then(function(d) {
+      const hit = (d.results || []).find(function(t) { return t.previewUrl; });
+      if (!hit) throw new Error('no-preview');
+      return hit.previewUrl;
+    });
 }
 function applySource(song) {
   if (!audioEl) {
