@@ -97,9 +97,17 @@
       if (!host || !camera || !renderer) return false;
       var w = host.clientWidth, h = host.clientHeight;
       if (!w || !h) return false;
-      var extentV = o.designExtent * Math.max(1, o.designH / h);
-      var extentH = Math.max(o.designExtent * (o.designW / o.designH),
-                             extentV * (w / h));
+      // 关键：extentH/extentV 必须等于容器比例 w/h（下面第三行保证），
+      // 否则正交相机的视锥比例和画布比例不一致 —— 场景被横向/纵向拉伸
+      // （手机窄长屏上最明显，家具变"瘦高"）。取景范围只会扩大不会缩小，
+      // 所以房间永远完整装下、且任何比例下都不变形。
+      var aspect = w / h;
+      // 垂直视野：至少 designExtent（装下设计高度）；
+      // 容器更窄时按比例放大，保证水平方向也装得下设计宽度
+      var extentV = Math.max(o.designExtent,
+                             o.designExtent * (o.designW / o.designH) / aspect);
+      // 水平视野：严格按容器比例推 —— 视锥比例 == 画布比例，永不变形
+      var extentH = extentV * aspect;
       camera.left = -extentH;
       camera.right = extentH;
       camera.top = extentV;

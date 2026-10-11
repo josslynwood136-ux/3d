@@ -85,11 +85,13 @@
     var canvas = host.querySelector('canvas');
 
     // ---- 场景基础 ----
+    var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
     var renderer = new THREE.WebGLRenderer({
       canvas: canvas,
-      antialias: true,
+      antialias: !isMobile,           // 手机上关抗锯齿，省性能
       alpha: false,
-      powerPreference: 'high-performance'
+      powerPreference: isMobile ? 'low-power' : 'high-performance',
+      failIfMajorPerformanceCaveat: false  // 手机不因性能警告拒绝创建
     });
     renderer.setPixelRatio(Math.min(global.devicePixelRatio, 2));
     renderer.setSize(host.clientWidth, host.clientHeight);

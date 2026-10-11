@@ -63,7 +63,7 @@ function applyAppearanceStyle() {
       grid.classList.add('app-icon-shape-' + (s.desktopIconShape || 'rounded'));
       grid.style.gridTemplateColumns = 'repeat(' + (s.desktopColumns || 4) + ', 1fr)';
     }
-    document.documentElement.style.setProperty('--desktop-icon-bg', s.desktopIconBg || 'rgba(255,255,255,.55)');
+    document.documentElement.style.setProperty('--desktop-icon-bg', s.desktopIconBg || 'rgba(255,255,255,.85)');
     var wc = $('widgetClock');
     if (wc) wc.style.display = s.showClock !== false ? '' : 'none';
     var wn = $('widgetNotes');

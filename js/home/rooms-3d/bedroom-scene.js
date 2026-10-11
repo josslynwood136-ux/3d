@@ -143,9 +143,22 @@
     camera.position.copy(defaultCamPos);
     camera.lookAt(defaultLookAt);
 
+    var isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent);
+    var webglCtxAttrs = {
+      antialias: !isMobile,
+      failIfMajorPerformanceCaveat: false,
+      powerPreference: isMobile ? 'low-power' : 'high-performance'
+    };
     try {
-      renderer = new THREE.WebGLRenderer({ canvas: canvas, antialias: true, powerPreference: 'high-performance' });
+      renderer = new THREE.WebGLRenderer(Object.assign({ canvas: canvas }, webglCtxAttrs));
     } catch (err) {
+      // 手机 WebGL 偶尔创建失败，等一帧重试
+      if (initAttempts < 3) {
+        initAttempts++;
+        if (initTimer) clearTimeout(initTimer);
+        initTimer = setTimeout(initBedroom3D, 300);
+        return;
+      }
       scene = null;
       camera = null;
       showError('当前浏览器无法启动 3D 卧室，请开启 WebGL 后刷新');
@@ -160,6 +173,17 @@
         if (!destroyed) fitCamera();
       });
     }
+
+    // WebGL 上下文丢失处理（手机内存不足时常见）
+    canvas.addEventListener('webglcontextlost', function (e) {
+      e.preventDefault();
+      showError('3D 上下文丢失，请刷新页面重试');
+      if (loop) cancelAnimationFrame(loop);
+    }, false);
+    canvas.addEventListener('webglcontextrestored', function () {
+      showError('3D 上下文已恢复，正在重新加载…');
+      if (typeof initBedroom3D === 'function') initBedroom3D();
+    }, false);
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = THREE.PCFSoftShadowMap;
     // 输出色彩空间：和 r128 的 LinearEncoding 对齐。
@@ -250,6 +274,11 @@
     };
 
     var ppBuf = renderer.getDrawingBufferSize(new THREE.Vector2());
+    // 手机上跳过后期处理（GTAO + Bloom 太耗 GPU，手机跑不动）
+    if (isMobile) {
+      baseRender(scene, camera);
+      return;
+    }
     Promise.all([
       import('three/addons/postprocessing/EffectComposer.js'),
       import('three/addons/postprocessing/RenderPass.js'),

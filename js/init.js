@@ -60,14 +60,22 @@ function initAppPages() {
   var syncDots = function(idx) {
     for (var i = 0; i < dots.length; i++) dots[i].classList.toggle('active', i === idx);
   };
+  // scroll 事件用 requestAnimationFrame 节流，避免每帧多次触发
+  var ticking = false;
   pages.addEventListener('scroll', function() {
-    var w = pages.clientWidth || 1;
-    syncDots(Math.round(pages.scrollLeft / w));
+    if (ticking) return;
+    ticking = true;
+    requestAnimationFrame(function() {
+      var w = pages.clientWidth || 1;
+      syncDots(Math.round(pages.scrollLeft / w));
+      ticking = false;
+    });
   });
   for (var i = 0; i < dots.length; i++) {
     (function(idx) {
       dots[i].addEventListener('click', function() {
-        pages.scrollTo({ left: idx * pages.clientWidth, behavior: 'smooth' });
+        // 用 instant 跳转 + CSS scroll-snap 吸附，避免 smooth 动画和 snap 冲突
+        pages.scrollTo({ left: idx * pages.clientWidth, behavior: 'instant' });
       });
     })(i);
   }
@@ -89,7 +97,7 @@ function initAppPages() {
     if (moved) {
       var w = pages.clientWidth || 1;
       var idx = Math.round(pages.scrollLeft / w);
-      pages.scrollTo({ left: idx * w, behavior: 'smooth' });
+      // 拖拽松手后靠 scroll-snap 吸附，不再用 smooth scrollTo
       syncDots(idx);
       suppressNext = true;
       setTimeout(function() { suppressNext = false; }, 220);
